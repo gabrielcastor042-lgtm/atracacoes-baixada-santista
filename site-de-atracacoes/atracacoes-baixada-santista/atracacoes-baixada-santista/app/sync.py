@@ -8,6 +8,7 @@ from sqlmodel import select
 from .database import get_session, init_db
 from .models import Atracacao
 from .scrapers.base import TerminalScraper
+from .scrapers.btp import BTPScraper
 from .scrapers.ecoporto import EcoportoScraper
 
 logger = logging.getLogger("sync")
@@ -15,12 +16,11 @@ logger = logging.getLogger("sync")
 # Adicione aqui novos scrapers assim que estiverem prontos:
 # from .scrapers.santos_brasil import SantosBrasilScraper
 # from .scrapers.embraport import EmbraportScraper
-# from .scrapers.btp import BTPScraper
 ACTIVE_SCRAPERS: List[TerminalScraper] = [
     EcoportoScraper(),
+    BTPScraper(),
     # SantosBrasilScraper(),
     # EmbraportScraper(),
-    # BTPScraper(),
 ]
 
 
