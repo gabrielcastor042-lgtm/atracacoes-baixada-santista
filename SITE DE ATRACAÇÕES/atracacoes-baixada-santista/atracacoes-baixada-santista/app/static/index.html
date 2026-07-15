@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Atracações — Baixada Santista</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --card: #ffffff;
+    --text: #1a2233;
+    --muted: #64748b;
+    --border: #e2e8f0;
+    --accent: #0f766e;
+    --accent-hover: #0d6560;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 24px 20px 8px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0 0 4px;
+  }
+  header p {
+    color: var(--muted);
+    margin: 0;
+    font-size: 14px;
+  }
+  .toolbar {
+    max-width: 1200px;
+    margin: 16px auto 0;
+    padding: 0 20px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  input[type="text"], select {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    background: var(--card);
+    color: var(--text);
+  }
+  input[type="text"] {
+    flex: 1 1 240px;
+    min-width: 180px;
+  }
+  button {
+    padding: 9px 16px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:hover { background: var(--accent-hover); }
+  button.secondary {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  main {
+    max-width: 1200px;
+    margin: 16px auto 40px;
+    padding: 0 20px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .status-line {
+    padding: 10px 16px;
+    font-size: 13px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    text-align: left;
+    padding: 10px 12px;
+    background: #f8fafc;
+    color: var(--muted);
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f8fafc; }
+  .terminal-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    background: #ecfdf5;
+    color: var(--accent);
+  }
+  .empty, .loading, .error {
+    padding: 40px 16px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .error { color: #b91c1c; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Atracações — Baixada Santista</h1>
+  <p>Consulta unificada de navios previstos/atracados nos terminais de Santos.</p>
+</header>
+
+<div class="toolbar">
+  <input type="text" id="q" placeholder="Buscar por navio ou viagem...">
+  <select id="terminal">
+    <option value="">Todos os terminais</option>
+    <option value="ecoporto">Ecoporto Santos</option>
+    <option value="santos_brasil">Santos Brasil Tecon</option>
+    <option value="dp_world">DP World (Embraport)</option>
+    <option value="btp">BTP</option>
+  </select>
+  <button id="btn-buscar">Buscar</button>
+  <button id="btn-sync" class="secondary">Sincronizar agora</button>
+</div>
+
+<main>
+  <div class="card">
+    <div class="status-line" id="status-line">Carregando...</div>
+    <div id="table-wrap"></div>
+  </div>
+</main>
+
+<script>
+const API_BASE = "";
+
+const els = {
+  q: document.getElementById("q"),
+  terminal: document.getElementById("terminal"),
+  btnBuscar: document.getElementById("btn-buscar"),
+  btnSync: document.getElementById("btn-sync"),
+  statusLine: document.getElementById("status-line"),
+  tableWrap: document.getElementById("table-wrap"),
+};
+
+const TERMINAL_LABELS = {
+  ecoporto: "Ecoporto Santos",
+  santos_brasil: "Santos Brasil Tecon",
+  dp_world: "DP World",
+  btp: "BTP",
+};
+
+function formatDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function renderRows(rows) {
+  if (!rows.length) {
+    els.tableWrap.innerHTML = '<div class="empty">Nenhum resultado encontrado.</div>';
+    return;
+  }
+
+  const cols = [
+    ["navio", "Navio"],
+    ["viagem", "Viagem"],
+    ["terminal", "Terminal"],
+    ["berco", "Berço"],
+    ["eta", "ETA"],
+    ["etb", "ETB"],
+    ["etd", "ETD"],
+    ["ata", "ATA"],
+    ["atb", "ATB"],
+    ["atd", "ATD"],
+    ["deadline_carga", "Deadline carga"],
+    ["previsao_abertura_gate", "Previsão gate"],
+  ];
+
+  const dateFields = new Set(["eta", "etb", "etd", "ata", "atb", "atd", "deadline_carga", "previsao_abertura_gate"]);
+
+  const thead = `<thead><tr>${cols.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead>`;
+  const tbody = `<tbody>${rows.map((row) => {
+    const cells = cols.map(([key]) => {
+      if (key === "terminal") {
+        const label = TERMINAL_LABELS[row.terminal] || row.terminal;
+        return `<td><span class="terminal-badge">${label}</span></td>`;
+      }
+      const value = row[key];
+      const display = dateFields.has(key) ? formatDate(value) : (value || "—");
+      return `<td>${display}</td>`;
+    }).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("")}</tbody>`;
+
+  els.tableWrap.innerHTML = `<table>${thead}${tbody}</table>`;
+}
+
+async function buscar() {
+  els.statusLine.textContent = "Carregando...";
+  els.tableWrap.innerHTML = "";
+
+  const params = new URLSearchParams();
+  if (els.q.value.trim()) params.set("q", els.q.value.trim());
+  if (els.terminal.value) params.set("terminal", els.terminal.value);
+
+  try {
+    const resp = await fetch(`${API_BASE}/buscar?${params.toString()}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const rows = await resp.json();
+    els.statusLine.textContent = `${rows.length} registro(s) encontrado(s).`;
+    renderRows(rows);
+  } catch (err) {
+    els.statusLine.textContent = "Erro ao consultar a API.";
+    els.tableWrap.innerHTML = `<div class="error">${err.message}</div>`;
+  }
+}
+
+async function sincronizar() {
+  els.btnSync.disabled = true;
+  els.btnSync.textContent = "Sincronizando...";
+  try {
+    const resp = await fetch(`${API_BASE}/sync`, { method: "POST" });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    await resp.json();
+    await buscar();
+  } catch (err) {
+    els.statusLine.textContent = "Erro ao sincronizar.";
+  } finally {
+    els.btnSync.disabled = false;
+    els.btnSync.textContent = "Sincronizar agora";
+  }
+}
+
+els.btnBuscar.addEventListener("click", buscar);
+els.btnSync.addEventListener("click", sincronizar);
+els.q.addEventListener("keydown", (e) => { if (e.key === "Enter") buscar(); });
+els.terminal.addEventListener("change", buscar);
+
+buscar();
+</script>
+</body>
+</html>
