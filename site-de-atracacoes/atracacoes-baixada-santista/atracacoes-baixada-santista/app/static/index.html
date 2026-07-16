@@ -23,7 +23,7 @@
   }
   header {
     padding: 24px 20px 8px;
-    max-width: 1200px;
+    max-width: 1600px;
     margin: 0 auto;
   }
   h1 {
@@ -36,7 +36,7 @@
     font-size: 14px;
   }
   .toolbar {
-    max-width: 1200px;
+    max-width: 1600px;
     margin: 16px auto 0;
     padding: 0 20px;
     display: flex;
@@ -73,7 +73,7 @@
   }
   button:disabled { opacity: 0.6; cursor: default; }
   main {
-    max-width: 1200px;
+    max-width: 1600px;
     margin: 16px auto 40px;
     padding: 0 20px;
   }
@@ -89,14 +89,18 @@
     color: var(--muted);
     border-bottom: 1px solid var(--border);
   }
+  #table-wrap {
+    overflow-x: auto;
+  }
   table {
     width: 100%;
+    min-width: 1100px;
     border-collapse: collapse;
     font-size: 13px;
   }
   thead th {
     text-align: left;
-    padding: 10px 12px;
+    padding: 8px 10px;
     background: #f8fafc;
     color: var(--muted);
     font-weight: 600;
@@ -104,7 +108,7 @@
     border-bottom: 1px solid var(--border);
   }
   tbody td {
-    padding: 10px 12px;
+    padding: 8px 10px;
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
   }
@@ -126,6 +130,20 @@
     font-size: 14px;
   }
   .error { color: #b91c1c; }
+  .upload-row {
+    margin-top: 4px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+  .upload-label {
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .upload-status {
+    font-size: 13px;
+    color: var(--muted);
+  }
 </style>
 </head>
 <body>
@@ -147,6 +165,13 @@
   <button id="btn-sync" class="secondary">Sincronizar agora</button>
 </div>
 
+<div class="toolbar upload-row">
+  <span class="upload-label">Santos Brasil (planilha manual):</span>
+  <input type="file" id="upload-file" accept=".xls,.xlsx,.html,.htm">
+  <button id="btn-upload" class="secondary">Enviar planilha</button>
+  <span id="upload-status" class="upload-status"></span>
+</div>
+
 <main>
   <div class="card">
     <div class="status-line" id="status-line">Carregando...</div>
@@ -164,6 +189,9 @@ const els = {
   btnSync: document.getElementById("btn-sync"),
   statusLine: document.getElementById("status-line"),
   tableWrap: document.getElementById("table-wrap"),
+  uploadFile: document.getElementById("upload-file"),
+  btnUpload: document.getElementById("btn-upload"),
+  uploadStatus: document.getElementById("upload-status"),
 };
 
 const TERMINAL_LABELS = {
@@ -257,10 +285,43 @@ async function sincronizar() {
   }
 }
 
+async function enviarPlanilha() {
+  const file = els.uploadFile.files[0];
+  if (!file) {
+    els.uploadStatus.textContent = "Escolha um arquivo primeiro.";
+    return;
+  }
+
+  els.btnUpload.disabled = true;
+  els.btnUpload.textContent = "Enviando...";
+  els.uploadStatus.textContent = "";
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const resp = await fetch(`${API_BASE}/upload/santos_brasil`, {
+      method: "POST",
+      body: formData,
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+    els.uploadStatus.textContent = `${data.registros} navio(s) atualizado(s).`;
+    els.uploadFile.value = "";
+    await buscar();
+  } catch (err) {
+    els.uploadStatus.textContent = `Erro: ${err.message}`;
+  } finally {
+    els.btnUpload.disabled = false;
+    els.btnUpload.textContent = "Enviar planilha";
+  }
+}
+
 els.btnBuscar.addEventListener("click", buscar);
 els.btnSync.addEventListener("click", sincronizar);
 els.q.addEventListener("keydown", (e) => { if (e.key === "Enter") buscar(); });
 els.terminal.addEventListener("change", buscar);
+els.btnUpload.addEventListener("click", enviarPlanilha);
 
 buscar();
 </script>
