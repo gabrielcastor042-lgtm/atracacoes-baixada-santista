@@ -101,8 +101,11 @@ class BTPScraper(TerminalScraper):
             _normalize_header(th.get_text()) for th in table.find("tr").find_all(["th"])
         ]
 
+              # A página tem uma segunda tabela idêntica (versão desktop/mobile);
+        # como usamos só a primeira (soup.find("table")), não há duplicidade
+        # a resolver aqui — o dedupe de verdade (por terminal+navio+viagem)
+        # já acontece no banco, em app.sync._upsert.
         rows_out: List[Dict[str, Any]] = []
-        seen_raps: set = set()
         body = table.find("tbody") or table
         for tr in body.find_all("tr"):
             cells = tr.find_all("td")
@@ -123,14 +126,10 @@ class BTPScraper(TerminalScraper):
                 else:
                     record[field] = text or None
 
-            # A página tem tabelas duplicadas (versão desktop/mobile) com o
-            # mesmo conteúdo; dedupe por RAP dentro desta própria chamada.
-            rap = record.get("fonte_raw_id")
-            if record.get("navio") and rap not in seen_raps:
-                seen_raps.add(rap)
+            if record.get("navio"):
                 rows_out.append(record)
 
-        return rows_out
+        return rows_out  
 
 
 if __name__ == "__main__":
