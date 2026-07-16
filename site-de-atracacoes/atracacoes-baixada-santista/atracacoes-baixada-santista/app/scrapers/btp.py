@@ -136,5 +136,5 @@ if __name__ == "__main__":
     import json
 
     data = BTPScraper().fetch()
-    print(json.dumps(data[:3], indent=2, ensure_ascii=False))
+    print(json.dumps(data[:3], indent=2, ensure_ascii=False, default=str))
     print(f"\nTotal de registros: {len(data)}")
