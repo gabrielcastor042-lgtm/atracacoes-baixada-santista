@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-from .base import TerminalScraper
+from .base import TerminalScraper, run_in_thread
 
 URL = "https://novo-tas.btp.com.br/ConsultasLivres/ListaAtracacaoIndex"
 
@@ -66,7 +66,7 @@ class BTPScraper(TerminalScraper):
     terminal_id = "btp"
 
     def fetch(self) -> List[Dict[str, Any]]:
-        html = self._render()
+        html = run_in_thread(self._render)
         return self._parse(html)
 
     def _render(self) -> str:
