@@ -9,17 +9,17 @@ from .database import get_session, init_db
 from .models import Atracacao
 from .scrapers.base import TerminalScraper
 from .scrapers.btp import BTPScraper
+from .scrapers.embraport import EmbraportScraper
 
 logger = logging.getLogger("sync")
 
 # Adicione aqui novos scrapers assim que estiverem prontos:
 # from .scrapers.santos_brasil import SantosBrasilScraper
-# from .scrapers.embraport import EmbraportScraper
 # from .scrapers.ecoporto import EcoportoScraper  # bloqueado por anti-bot (Akamai), ver docstring
 ACTIVE_SCRAPERS: List[TerminalScraper] = [
     BTPScraper(),
+    EmbraportScraper(),
     # SantosBrasilScraper(),
-    # EmbraportScraper(),
     # EcoportoScraper(),
 ]
 
