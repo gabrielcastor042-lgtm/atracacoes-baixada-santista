@@ -48,12 +48,12 @@ HEADER_MAP = {
 _DATE_FMT = "%d/%m/%Y %H:%M:%S"
 
 
-def _parse_date(value: str) -> Optional[str]:
+def _parse_date(value: str) -> Optional[datetime]:
     value = (value or "").strip()
     if not value:
         return None
     try:
-        return datetime.strptime(value, _DATE_FMT).isoformat()
+        return datetime.strptime(value, _DATE_FMT)
     except ValueError:
         return None
 
