@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import select
@@ -12,7 +12,8 @@ from sqlmodel import select
 from .database import get_session, init_db
 from .models import Atracacao
 from .scheduler import start_scheduler
-from .sync import run_sync
+from .scrapers.santos_brasil import parse_upload
+from .sync import _upsert, run_sync
 
 
 @asynccontextmanager
@@ -56,6 +57,23 @@ def buscar(
 def sync_now():
     """Dispara uma sincronização manual (útil para testes/depuração)."""
     return run_sync()
+
+
+@app.post("/upload/santos_brasil")
+async def upload_santos_brasil(file: UploadFile = File(...)):
+    """Recebe o arquivo .xls (na verdade HTML) exportado manualmente da
+    área de cliente da Santos Brasil e sincroniza os navios no banco."""
+    content = await file.read()
+    records = parse_upload(content)
+    if not records:
+        raise HTTPException(422, "Nenhum navio encontrado no arquivo enviado.")
+
+    with get_session() as session:
+        for record in records:
+            _upsert(session, record)
+        session.commit()
+
+    return {"terminal": "santos_brasil", "registros": len(records)}
 
 
 @app.get("/health")
