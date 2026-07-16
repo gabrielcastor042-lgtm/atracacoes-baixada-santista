@@ -10,7 +10,7 @@ logger = logging.getLogger("scheduler")
 
 # "Tempo real" pedido = atualização a cada 5 minutos.
 # Ajuste conforme os limites de requisição de cada terminal (ver README).
-SYNC_INTERVAL_MINUTES = 5
+SYNC_INTERVAL_MINUTES = 10
 
 
 def start_scheduler() -> BackgroundScheduler:
