@@ -14,10 +14,10 @@ from openpyxl.utils import get_column_letter
 from sqlmodel import select
 
 from .database import get_session, init_db
-from .models import Atracacao
+from .models import Atracacao, SyncStatus
 from .scheduler import start_scheduler
 from .scrapers.santos_brasil import parse_upload
-from .sync import _upsert, run_sync
+from .sync import _upsert, registrar_status, run_sync
 
 # (chave da coluna, cabeçalho na planilha)
 _EXPORT_COLUMNS = [
@@ -113,7 +113,7 @@ def exportar(
     for row in rows:
         ws.append([_valor_exportado(row, col) for col, _ in _EXPORT_COLUMNS])
 
-        date_format = 'DD/MM/YYYY " - "HH:MM'
+    date_format = 'DD/MM/YYYY " - "HH:MM'
     for col_index, (col, _) in enumerate(_EXPORT_COLUMNS, start=1):
         letter = get_column_letter(col_index)
         ws.column_dimensions[letter].width = 20
@@ -151,8 +151,17 @@ async def upload_santos_brasil(file: UploadFile = File(...)):
         for record in records:
             _upsert(session, record)
         session.commit()
+        registrar_status(session, "santos_brasil", len(records))
 
     return {"terminal": "santos_brasil", "registros": len(records)}
+
+
+@app.get("/status", response_model=List[SyncStatus])
+def status():
+    """Quando cada fonte (scraper automático ou upload manual) foi
+    sincronizada pela última vez."""
+    with get_session() as session:
+        return session.exec(select(SyncStatus)).all()
 
 
 @app.get("/health")
