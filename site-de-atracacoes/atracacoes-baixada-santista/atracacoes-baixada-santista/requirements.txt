@@ -8,3 +8,4 @@ playwright
 python-multipart
 openpyxl
 tzdata
+psycopg2-binary
