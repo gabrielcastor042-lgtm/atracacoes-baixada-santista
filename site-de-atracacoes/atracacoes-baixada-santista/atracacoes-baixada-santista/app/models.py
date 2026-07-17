@@ -12,6 +12,8 @@ from typing import Optional
 
 from sqlmodel import SQLModel, Field
 
+from .timezone import agora_brasilia
+
 
 class Atracacao(SQLModel, table=True):
     __tablename__ = "atracacoes"
@@ -39,7 +41,7 @@ class Atracacao(SQLModel, table=True):
 
     # Metadados de sincronização
     fonte_raw_id: Optional[str] = None  # id/RAP original do terminal, p/ dedupe
-    atualizado_em: datetime = Field(default_factory=datetime.utcnow)
+    atualizado_em: datetime = Field(default_factory=agora_brasilia)
 
     class Config:
         arbitrary_types_allowed = True
