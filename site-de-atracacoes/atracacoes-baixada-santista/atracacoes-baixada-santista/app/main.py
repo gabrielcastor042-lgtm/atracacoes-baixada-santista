@@ -113,7 +113,7 @@ def exportar(
     for row in rows:
         ws.append([_valor_exportado(row, col) for col, _ in _EXPORT_COLUMNS])
 
-    date_format = "DD/MM/YYYY HH:MM"
+        date_format = 'DD/MM/YYYY " - "HH:MM'
     for col_index, (col, _) in enumerate(_EXPORT_COLUMNS, start=1):
         letter = get_column_letter(col_index)
         ws.column_dimensions[letter].width = 20
