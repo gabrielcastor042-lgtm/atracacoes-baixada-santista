@@ -44,16 +44,24 @@ def _upsert(session, record: dict) -> None:
 
 
 def registrar_status(
-    session, terminal: str, registros: int, erro: Optional[str] = None
+    session, terminal: str, registros: Optional[int] = None, erro: Optional[str] = None
 ) -> None:
     """Marca quando essa fonte (scraper automático ou upload manual) foi
-    sincronizada por último, mesmo que nenhum navio tenha mudado."""
+    sincronizada por último, mesmo que nenhum navio tenha mudado.
+
+    Se `registros` for None (caso de erro), mantém a última contagem boa
+    conhecida em vez de zerar — assim a tela não mostra "0 navios" quando
+    na real os dados antigos continuam válidos no banco, só essa
+    tentativa específica de sincronizar é que falhou."""
     status = session.get(SyncStatus, terminal)
     if status is None:
-        status = SyncStatus(terminal=terminal, atualizado_em=agora_brasilia(), registros=registros, erro=erro)
+        status = SyncStatus(
+            terminal=terminal, atualizado_em=agora_brasilia(), registros=registros or 0, erro=erro
+        )
     else:
         status.atualizado_em = agora_brasilia()
-        status.registros = registros
+        if registros is not None:
+            status.registros = registros
         status.erro = erro
     session.add(status)
     session.commit()
@@ -66,6 +74,14 @@ def run_sync() -> dict:
         for scraper in ACTIVE_SCRAPERS:
             try:
                 records = scraper.fetch()
+                if not records:
+                    # Terminais como BTP/Embraport sempre têm navios; vazio
+                    # aqui é sinal de falha temporária no site/scraper, não
+                    # "nenhum navio de verdade" — tratamos como erro pra não
+                    # sobrescrever os dados bons já gravados com um "0" falso.
+                    raise RuntimeError(
+                        "Nenhum registro retornado (provável falha temporária no site do terminal)"
+                    )
                 for record in records:
                     _upsert(session, record)
                 session.commit()
@@ -75,7 +91,7 @@ def run_sync() -> dict:
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Falha ao sincronizar %s", scraper.terminal_id)
                 results[scraper.terminal_id] = f"erro: {exc}"
-                registrar_status(session, scraper.terminal_id, 0, erro=str(exc))
+                registrar_status(session, scraper.terminal_id, erro=str(exc))
     return results
 
 
