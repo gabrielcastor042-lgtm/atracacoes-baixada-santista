@@ -1,59 +1,84 @@
-"""
-Schema unificado de atracação.
-
-Todos os scrapers (um por terminal) devem devolver uma lista de dicts
-que possam ser convertidos para este modelo. Datas ficam em ISO 8601
-(YYYY-MM-DDTHH:MM:SS) ou None quando não informadas pelo terminal.
-"""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
+import logging
+from typing import List, Optional
 
-from sqlmodel import SQLModel, Field
+from sqlmodel import select
 
+from .database import get_session, init_db
+from .models import Atracacao, SyncStatus
+from .scrapers.base import TerminalScraper
+from .scrapers.btp import BTPScraper
+from .scrapers.embraport import EmbraportScraper
 from .timezone import agora_brasilia
 
+logger = logging.getLogger("sync")
 
-class Atracacao(SQLModel, table=True):
-    __tablename__ = "atracacoes"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    # Identificação
-    navio: str = Field(index=True)
-    viagem: Optional[str] = Field(default=None, index=True)
-    terminal: str = Field(index=True)  # santos_brasil | dp_world | btp | ecoporto
-    berco: Optional[str] = None        # "Terminal de atracação" / berço físico
-
-    # Prazos operacionais
-    deadline_carga: Optional[datetime] = None
-    previsao_abertura_gate: Optional[datetime] = None
-    abertura_gate: Optional[datetime] = None
-
-    # Janela do navio
-    eta: Optional[datetime] = None  # Estimated Time of Arrival
-    etb: Optional[datetime] = None  # Estimated Time of Berthing
-    etd: Optional[datetime] = None  # Estimated Time of Departure
-    ata: Optional[datetime] = None  # Actual Time of Arrival
-    atb: Optional[datetime] = None  # Actual Time of Berthing
-    atd: Optional[datetime] = None  # Actual Time of Departure
-
-    # Metadados de sincronização
-    fonte_raw_id: Optional[str] = None  # id/RAP original do terminal, p/ dedupe
-    atualizado_em: datetime = Field(default_factory=agora_brasilia)
-
-    class Config:
-        arbitrary_types_allowed = True
+# Adicione aqui novos scrapers assim que estiverem prontos:
+# from .scrapers.santos_brasil import SantosBrasilScraper
+# from .scrapers.ecoporto import EcoportoScraper  # bloqueado por anti-bot (Akamai), ver docstring
+ACTIVE_SCRAPERS: List[TerminalScraper] = [
+    BTPScraper(),
+    EmbraportScraper(),
+    # SantosBrasilScraper(),
+    # EcoportoScraper(),
+]
 
 
-class SyncStatus(SQLModel, table=True):
-    """Guarda quando cada fonte (scraper automático ou upload manual) foi
-    sincronizada pela última vez, independente de ter mudado algum navio."""
+def _upsert(session, record: dict) -> None:
+    """Dedupe por (terminal, navio, viagem). Se já existir, atualiza; senão, insere."""
+    stmt = select(Atracacao).where(
+        Atracacao.terminal == record.get("terminal"),
+        Atracacao.navio == record.get("navio"),
+        Atracacao.viagem == record.get("viagem"),
+    )
+    existing = session.exec(stmt).first()
 
-    __tablename__ = "sync_status"
+    if existing:
+        for key, value in record.items():
+            setattr(existing, key, value)
+        existing.atualizado_em = agora_brasilia()
+        session.add(existing)
+    else:
+        session.add(Atracacao(**record))
 
-    terminal: str = Field(primary_key=True)  # santos_brasil | dp_world | btp | ecoporto
-    atualizado_em: datetime
-    registros: int
-    erro: Optional[str] = None
+
+def registrar_status(
+    session, terminal: str, registros: int, erro: Optional[str] = None
+) -> None:
+    """Marca quando essa fonte (scraper automático ou upload manual) foi
+    sincronizada por último, mesmo que nenhum navio tenha mudado."""
+    status = session.get(SyncStatus, terminal)
+    if status is None:
+        status = SyncStatus(terminal=terminal, atualizado_em=agora_brasilia(), registros=registros, erro=erro)
+    else:
+        status.atualizado_em = agora_brasilia()
+        status.registros = registros
+        status.erro = erro
+    session.add(status)
+    session.commit()
+
+
+def run_sync() -> dict:
+    init_db()
+    results = {}
+    with get_session() as session:
+        for scraper in ACTIVE_SCRAPERS:
+            try:
+                records = scraper.fetch()
+                for record in records:
+                    _upsert(session, record)
+                session.commit()
+                results[scraper.terminal_id] = len(records)
+                logger.info("Sincronizado %s: %d registros", scraper.terminal_id, len(records))
+                registrar_status(session, scraper.terminal_id, len(records))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Falha ao sincronizar %s", scraper.terminal_id)
+                results[scraper.terminal_id] = f"erro: {exc}"
+                registrar_status(session, scraper.terminal_id, 0, erro=str(exc))
+    return results
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    print(run_sync())
