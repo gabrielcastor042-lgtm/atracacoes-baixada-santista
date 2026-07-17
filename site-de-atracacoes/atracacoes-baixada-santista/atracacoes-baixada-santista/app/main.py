@@ -16,7 +16,7 @@ from sqlmodel import select
 from .database import get_session, init_db
 from .models import Atracacao, SyncStatus
 from .scheduler import start_scheduler
-from .scrapers.santos_brasil import parse_upload
+from .scrapers.santos_brasil import merge_gate_data, parse_gate_upload, parse_upload
 from .sync import _upsert, registrar_status, run_sync
 
 # (chave da coluna, cabeçalho na planilha)
@@ -139,13 +139,24 @@ def sync_now():
 
 
 @app.post("/upload/santos_brasil")
-async def upload_santos_brasil(file: UploadFile = File(...)):
-    """Recebe o arquivo .xls (na verdade HTML) exportado manualmente da
-    área de cliente da Santos Brasil e sincroniza os navios no banco."""
-    content = await file.read()
-    records = parse_upload(content)
+async def upload_santos_brasil(
+    arquivo_excel: UploadFile = File(..., description="Lista de Atracação (.xls)"),
+    arquivo_gate: UploadFile = File(
+        ..., description="Lista de Recebimento salva como HTML (traz a liberação de gate)"
+    ),
+):
+    """Recebe os dois arquivos exportados manualmente da área de cliente
+    da Santos Brasil — a planilha (.xls) principal e o relatório de
+    liberação de gate (salvo como .html) — e sincroniza os navios no
+    banco, já complementados com o dado de gate."""
+    conteudo_excel = await arquivo_excel.read()
+    records = parse_upload(conteudo_excel)
     if not records:
-        raise HTTPException(422, "Nenhum navio encontrado no arquivo enviado.")
+        raise HTTPException(422, "Nenhum navio encontrado na planilha (.xls) enviada.")
+
+    conteudo_gate = await arquivo_gate.read()
+    gate_por_id = parse_gate_upload(conteudo_gate)
+    records = merge_gate_data(records, gate_por_id)
 
     with get_session() as session:
         for record in records:
@@ -153,7 +164,8 @@ async def upload_santos_brasil(file: UploadFile = File(...)):
         session.commit()
         registrar_status(session, "santos_brasil", len(records))
 
-    return {"terminal": "santos_brasil", "registros": len(records)}
+    com_gate = sum(1 for r in records if r.get("abertura_gate") or r.get("previsao_abertura_gate"))
+    return {"terminal": "santos_brasil", "registros": len(records), "com_gate": com_gate}
 
 
 @app.get("/status", response_model=List[SyncStatus])
