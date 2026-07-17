@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Atracações — Baixada Santista</title>
+<title>Atracações - Porto de Santos</title>
 <style>
   :root {
     --bg: #f5f7fa;
@@ -148,7 +148,7 @@
 </head>
 <body>
 <header>
-  <h1>Atracações — Baixada Santista</h1>
+  <h1>Atracações - Porto de Santos</h1>
   <p>Consulta unificada de navios previstos/atracados nos terminais de Santos.</p>
 </header>
 
@@ -163,6 +163,7 @@
   </select>
   <button id="btn-buscar">Buscar</button>
   <button id="btn-sync" class="secondary">Sincronizar agora</button>
+  <button id="btn-exportar" class="secondary">Exportar Excel</button>
 </div>
 
 <div class="toolbar upload-row">
@@ -187,6 +188,7 @@ const els = {
   terminal: document.getElementById("terminal"),
   btnBuscar: document.getElementById("btn-buscar"),
   btnSync: document.getElementById("btn-sync"),
+  btnExportar: document.getElementById("btn-exportar"),
   statusLine: document.getElementById("status-line"),
   tableWrap: document.getElementById("table-wrap"),
   uploadFile: document.getElementById("upload-file"),
@@ -228,9 +230,10 @@ function renderRows(rows) {
     ["atd", "ATD"],
     ["deadline_carga", "Deadline carga"],
     ["previsao_abertura_gate", "Previsão gate"],
+    ["abertura_gate", "Abertura gate"],
   ];
 
-  const dateFields = new Set(["eta", "etb", "etd", "ata", "atb", "atd", "deadline_carga", "previsao_abertura_gate"]);
+  const dateFields = new Set(["eta", "etb", "etd", "ata", "atb", "atd", "deadline_carga", "previsao_abertura_gate", "abertura_gate"]);
 
   const thead = `<thead><tr>${cols.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead>`;
   const tbody = `<tbody>${rows.map((row) => {
@@ -239,7 +242,8 @@ function renderRows(rows) {
         const label = TERMINAL_LABELS[row.terminal] || row.terminal;
         return `<td><span class="terminal-badge">${label}</span></td>`;
       }
-      const value = row[key];
+      // Se não tem abertura de gate efetiva, usa a previsão como referência.
+      const value = key === "abertura_gate" ? (row.abertura_gate || row.previsao_abertura_gate) : row[key];
       const display = dateFields.has(key) ? formatDate(value) : (value || "—");
       return `<td>${display}</td>`;
     }).join("");
@@ -317,8 +321,16 @@ async function enviarPlanilha() {
   }
 }
 
+function exportarExcel() {
+  const params = new URLSearchParams();
+  if (els.q.value.trim()) params.set("q", els.q.value.trim());
+  if (els.terminal.value) params.set("terminal", els.terminal.value);
+  window.location.href = `${API_BASE}/exportar?${params.toString()}`;
+}
+
 els.btnBuscar.addEventListener("click", buscar);
 els.btnSync.addEventListener("click", sincronizar);
+els.btnExportar.addEventListener("click", exportarExcel);
 els.q.addEventListener("keydown", (e) => { if (e.key === "Enter") buscar(); });
 els.terminal.addEventListener("change", buscar);
 els.btnUpload.addEventListener("click", enviarPlanilha);
