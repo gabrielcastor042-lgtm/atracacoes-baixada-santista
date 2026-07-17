@@ -51,6 +51,26 @@ DEADLINE, BERTH_DIA_SEMANA, BERTH_HORARIO_INICIAL, BERTH_HORARIO_FINAL,
 P_ATRACA, ID, NAVIO, VIAGEM, AGENCIA, PREVISAO_CHEGADA, CHEGADA,
 PREVISAO_ATRACACAO, ATRACACAO, PREVISAO_SAIDA, SAIDA, BRC, SRV,
 DIA_JANELA (datas no formato dd/mm/aaaa HH:MM).
+
+Esse arquivo NÃO tem as datas de liberação de gate (Dry/Reefer) — essas
+só existem num segundo relatório da Santos Brasil ("Lista de
+Recebimento"), que só está disponível em PDF. O texto desse PDF não é
+extraível de forma confiável (fontes sem ToUnicode CMap, texto vira
+"(cid:XX)" embaralhado) — por isso pedimos pro cliente abrir esse
+relatório na tela normal (sem gerar PDF) e salvar como página HTML
+("Salvar como > Somente HTML"), e subir os DOIS arquivos juntos.
+`parse_gate_upload()` faz o parsing desse segundo arquivo (que vem
+salvo em Windows-1252, apesar do <meta charset="utf-8"> dele mentir) —
+tabela simples, sem `data-col`, colunas por posição:
+
+Número (ID), Berço (BRC), Navio, Viagem Armador, Viagem, Berth Windows,
+Dia, Início, Fim, Deadline, Previsão de Chegada, Previsão Liberacao do
+Dry, Previsão Liberação do Reefer, Liberacao do Dry, Liberação do Reefer
+(datas no formato dd/mm/AA HH:MM — ano com 2 dígitos, diferente do
+primeiro arquivo).
+
+`merge_gate_data()` junta os dois usando o "Número (ID)" como chave —
+é o mesmo código (`fonte_raw_id`) nos dois relatórios.
 """
 from __future__ import annotations
 
@@ -63,6 +83,7 @@ from bs4 import BeautifulSoup
 from .base import TerminalScraper
 
 _DATE_FMT = "%d/%m/%Y %H:%M"
+_GATE_DATE_FMT = "%d/%m/%y %H:%M"
 
 # Chave = atributo `data-col` do <th> (minúsculo). "None" = coluna
 # ignorada (não faz parte do schema unificado ou é redundante).
@@ -143,6 +164,68 @@ def parse_upload(content: bytes) -> List[Dict[str, Any]]:
             rows_out.append(record)
 
     return rows_out
+
+
+def _parse_gate_date(value: str) -> Optional[datetime]:
+    value = (value or "").strip()
+    if not value or value == "--":
+        return None
+    try:
+        return datetime.strptime(value, _GATE_DATE_FMT)
+    except ValueError:
+        return None
+
+
+def parse_gate_upload(content: bytes) -> Dict[str, Dict[str, Any]]:
+    """Faz o parsing do relatório "Lista de Recebimento" da Santos Brasil
+    (salvo como HTML pelo navegador, não a planilha principal). Colunas
+    identificadas por posição (sem `data-col`):
+    Número (ID), Berço, Navio, Viagem Armador, Viagem, Berth Windows,
+    Dia, Início, Fim, Deadline, Previsão de Chegada, Previsão Liberacao
+    do Dry, Previsão Liberação do Reefer, Liberacao do Dry, Liberação do
+    Reefer.
+
+    Devolve {fonte_raw_id: {"previsao_abertura_gate": ..., "abertura_gate": ...}}.
+    """
+    html = content.decode("cp1252", errors="replace")
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table")
+    if table is None:
+        return {}
+
+    body = table.find("tbody") or table
+    gate_por_id: Dict[str, Dict[str, Any]] = {}
+    for tr in body.find_all("tr"):
+        cells = tr.find_all("td")
+        if len(cells) < 14:
+            continue
+        textos = [c.get_text(strip=True) for c in cells]
+        fonte_raw_id = textos[0]
+        if not fonte_raw_id:
+            continue
+        gate_por_id[fonte_raw_id] = {
+            "previsao_abertura_gate": _parse_gate_date(textos[11]),
+            "abertura_gate": _parse_gate_date(textos[13]),
+        }
+    return gate_por_id
+
+
+def merge_gate_data(
+    records: List[Dict[str, Any]], gate_por_id: Dict[str, Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Preenche previsao_abertura_gate/abertura_gate nos registros da
+    planilha principal usando o relatório de liberação de gate, casando
+    pelo "Número (ID)" — é o mesmo código (fonte_raw_id) nos dois
+    relatórios."""
+    for record in records:
+        gate = gate_por_id.get(record.get("fonte_raw_id"))
+        if not gate:
+            continue
+        if gate.get("previsao_abertura_gate"):
+            record["previsao_abertura_gate"] = gate["previsao_abertura_gate"]
+        if gate.get("abertura_gate"):
+            record["abertura_gate"] = gate["abertura_gate"]
+    return records
 
 
 class SantosBrasilScraper(TerminalScraper):
