@@ -43,3 +43,15 @@ class Atracacao(SQLModel, table=True):
 
     class Config:
         arbitrary_types_allowed = True
+
+
+class SyncStatus(SQLModel, table=True):
+    """Guarda quando cada fonte (scraper automático ou upload manual) foi
+    sincronizada pela última vez, independente de ter mudado algum navio."""
+
+    __tablename__ = "sync_status"
+
+    terminal: str = Field(primary_key=True)  # santos_brasil | dp_world | btp | ecoporto
+    atualizado_em: datetime
+    registros: int
+    erro: Optional[str] = None
