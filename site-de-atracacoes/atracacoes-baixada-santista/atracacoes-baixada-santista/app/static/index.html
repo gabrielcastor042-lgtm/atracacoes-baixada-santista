@@ -35,6 +35,10 @@
     margin: 0;
     font-size: 14px;
   }
+  .sync-status-line {
+    margin-top: 6px;
+    font-size: 12px;
+  }
   .toolbar {
     max-width: 1600px;
     margin: 16px auto 0;
@@ -150,6 +154,7 @@
 <header>
   <h1>Atracações - Porto de Santos</h1>
   <p>Consulta unificada de navios previstos/atracados nos terminais de Santos.</p>
+  <p id="sync-status-line" class="sync-status-line">Carregando última sincronização...</p>
 </header>
 
 <div class="toolbar">
@@ -190,6 +195,7 @@ const els = {
   btnSync: document.getElementById("btn-sync"),
   btnExportar: document.getElementById("btn-exportar"),
   statusLine: document.getElementById("status-line"),
+  syncStatusLine: document.getElementById("sync-status-line"),
   tableWrap: document.getElementById("table-wrap"),
   uploadFile: document.getElementById("upload-file"),
   btnUpload: document.getElementById("btn-upload"),
@@ -273,6 +279,27 @@ async function buscar() {
   }
 }
 
+async function carregarStatusSync() {
+  try {
+    const resp = await fetch(`${API_BASE}/status`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const statuses = await resp.json();
+    if (!statuses.length) {
+      els.syncStatusLine.textContent = "Nenhuma sincronização registrada ainda.";
+      return;
+    }
+    const partes = statuses.map((s) => {
+      const label = TERMINAL_LABELS[s.terminal] || s.terminal;
+      const fonte = s.terminal === "santos_brasil" ? `${label} (upload manual)` : label;
+      const info = s.erro ? `erro (${formatDate(s.atualizado_em)})` : `${formatDate(s.atualizado_em)} · ${s.registros} navio(s)`;
+      return `${fonte}: ${info}`;
+    });
+    els.syncStatusLine.textContent = `Última atualização — ${partes.join("  |  ")}`;
+  } catch (err) {
+    els.syncStatusLine.textContent = "Não foi possível carregar o status de sincronização.";
+  }
+}
+
 async function sincronizar() {
   els.btnSync.disabled = true;
   els.btnSync.textContent = "Sincronizando...";
@@ -281,6 +308,7 @@ async function sincronizar() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     await resp.json();
     await buscar();
+    await carregarStatusSync();
   } catch (err) {
     els.statusLine.textContent = "Erro ao sincronizar.";
   } finally {
@@ -313,6 +341,7 @@ async function enviarPlanilha() {
     els.uploadStatus.textContent = `${data.registros} navio(s) atualizado(s).`;
     els.uploadFile.value = "";
     await buscar();
+    await carregarStatusSync();
   } catch (err) {
     els.uploadStatus.textContent = `Erro: ${err.message}`;
   } finally {
@@ -336,6 +365,7 @@ els.terminal.addEventListener("change", buscar);
 els.btnUpload.addEventListener("click", enviarPlanilha);
 
 buscar();
+carregarStatusSync();
 </script>
 </body>
 </html>
