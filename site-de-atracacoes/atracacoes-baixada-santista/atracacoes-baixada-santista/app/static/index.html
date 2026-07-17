@@ -293,7 +293,9 @@ async function carregarStatusSync() {
     const partes = statuses.map((s) => {
       const label = TERMINAL_LABELS[s.terminal] || s.terminal;
       const fonte = s.terminal === "santos_brasil" ? `${label} (upload manual)` : label;
-      const info = s.erro ? `erro (${formatDate(s.atualizado_em)})` : `${formatDate(s.atualizado_em)} · ${s.registros} navio(s)`;
+          const info = s.erro
+        ? `⚠ falhou em ${formatDate(s.atualizado_em)} (mantendo ${s.registros} navio(s) da última sincronização boa)`
+        : `${formatDate(s.atualizado_em)} · ${s.registros} navio(s)`;
       return `${fonte}: ${info}`;
     });
     els.syncStatusLine.textContent = `Última atualização — ${partes.join("  |  ")}`;
