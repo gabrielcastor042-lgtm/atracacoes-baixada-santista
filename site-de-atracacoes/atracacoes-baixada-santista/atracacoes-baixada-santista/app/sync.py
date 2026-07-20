@@ -43,6 +43,21 @@ def _upsert(session, record: dict) -> None:
         session.add(Atracacao(**record))
 
 
+def sincronizar_terminal(session, terminal_id: str, records: List[dict]) -> None:
+    """Upsert dos registros novos e remoção dos que sumiram dessa leitura
+    completa da fonte — mantém só o que está atualmente ativo no
+    terminal, sem acumular navios antigos pra sempre no banco."""
+    chaves_atuais = set()
+    for record in records:
+        _upsert(session, record)
+        chaves_atuais.add((record.get("navio"), record.get("viagem")))
+
+    stmt = select(Atracacao).where(Atracacao.terminal == terminal_id)
+    for existing in session.exec(stmt).all():
+        if (existing.navio, existing.viagem) not in chaves_atuais:
+            session.delete(existing)
+
+
 def registrar_status(
     session, terminal: str, registros: Optional[int] = None, erro: Optional[str] = None
 ) -> None:
@@ -82,8 +97,7 @@ def run_sync() -> dict:
                     raise RuntimeError(
                         "Nenhum registro retornado (provável falha temporária no site do terminal)"
                     )
-                for record in records:
-                    _upsert(session, record)
+                sincronizar_terminal(session, scraper.terminal_id, records)
                 session.commit()
                 results[scraper.terminal_id] = len(records)
                 logger.info("Sincronizado %s: %d registros", scraper.terminal_id, len(records))
