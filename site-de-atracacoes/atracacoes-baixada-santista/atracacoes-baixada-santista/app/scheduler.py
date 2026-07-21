@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -8,8 +9,9 @@ from .sync import run_sync
 
 logger = logging.getLogger("scheduler")
 
-# "Tempo real" pedido = atualização a cada 5 minutos.
-# Ajuste conforme os limites de requisição de cada terminal (ver README).
+# A sincronização (BTP + Embraport via Playwright) demora mais de 1 minuto
+# no servidor gratuito do Render, então usamos um intervalo maior pra não
+# sobrepor execuções.
 SYNC_INTERVAL_MINUTES = 10
 
 
@@ -20,7 +22,11 @@ def start_scheduler() -> BackgroundScheduler:
         "interval",
         minutes=SYNC_INTERVAL_MINUTES,
         id="sync_atracacoes",
+        # Dispara a primeira sincronização quase imediatamente, mas em
+        # segundo plano (thread própria do scheduler) — não trava a
+        # inicialização do servidor esperando o scraping terminar.
+        next_run_time=datetime.now(scheduler.timezone),
     )
     scheduler.start()
-    logger.info("Scheduler iniciado: sync a cada %d minutos", SYNC_INTERVAL_MINUTES)
+    logger.info("Scheduler iniciado: sync a cada %d minutos (primeira rodada já disparada)", SYNC_INTERVAL_MINUTES)
     return scheduler
