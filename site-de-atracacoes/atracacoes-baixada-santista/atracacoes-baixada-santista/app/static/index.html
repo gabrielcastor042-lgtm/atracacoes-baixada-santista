@@ -216,7 +216,7 @@ function formatDate(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "—";
   const pad = (n) => String(n).padStart(2, "0");
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} - ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function renderRows(rows) {
@@ -292,7 +292,7 @@ async function carregarStatusSync() {
     const partes = statuses.map((s) => {
       const label = TERMINAL_LABELS[s.terminal] || s.terminal;
       const fonte = s.terminal === "santos_brasil" ? `${label} (upload manual)` : label;
-          const info = s.erro
+      const info = s.erro
         ? `⚠ falhou em ${formatDate(s.atualizado_em)} (mantendo ${s.registros} navio(s) da última sincronização boa)`
         : `${formatDate(s.atualizado_em)} · ${s.registros} navio(s)`;
       return `${fonte}: ${info}`;
