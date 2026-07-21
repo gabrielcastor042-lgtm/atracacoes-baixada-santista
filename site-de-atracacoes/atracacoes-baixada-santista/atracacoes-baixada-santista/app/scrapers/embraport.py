@@ -130,13 +130,15 @@ def _linhas_com_texto(html: str):
 
 
 def _parse_confirmados(html: str) -> Dict[str, Dict[str, datetime]]:
-    """Extrai os dados confirmados (chegada/atracação/saída reais) da aba
-    "Desatracados". Devolve {fonte_raw_id: {"ata"/"atb"/"atd": datetime}}.
+    """Extrai os dados confirmados (atracação/saída reais) da aba
+    "Desatracados". Devolve {fonte_raw_id: {"atb"/"atd": datetime}}.
 
     Só confia numa linha quando a coluna "Atracado" vem preenchida — a
     aba às vezes lista navios que ainda nem atracaram (ruído do próprio
-    site), e usar a "Chegada" desses seria uma data futura disfarçada de
-    dado confirmado."""
+    site). A coluna "Chegada" dessa aba é IGNORADA de propósito: ela
+    sempre vem idêntica ao ETA (Previsão Chegada), ou seja, não é um dado
+    confirmado de verdade — é o mesmo valor previsto reaparecendo com
+    outro rótulo (mais um efeito do bug de `nomecoluna` duplicado)."""
     _, linhas = _linhas_com_texto(html)
 
     resultado: Dict[str, Dict[str, datetime]] = {}
@@ -147,9 +149,6 @@ def _parse_confirmados(html: str) -> Dict[str, Dict[str, datetime]]:
             continue
 
         confirmados: Dict[str, datetime] = {"atb": _parse_date(atracado)}
-        chegada = linha.get("chegada")
-        if chegada:
-            confirmados["ata"] = _parse_date(chegada)
         saida = linha.get("saída")
         if saida:
             confirmados["atd"] = _parse_date(saida)
