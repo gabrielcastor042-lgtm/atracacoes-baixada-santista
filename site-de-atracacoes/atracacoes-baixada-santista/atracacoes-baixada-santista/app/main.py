@@ -216,4 +216,44 @@ def debug_embraport_headers():
     return {"headers": headers, "primeira_linha": celulas}
 
 
+@app.get("/debug/embraport_filtros")
+def debug_embraport_filtros():
+    """TEMPORÁRIO: expande o painel de Filtros da Embraport e devolve o
+    HTML dos campos de data e das abas de status (Previstos/Em Operação/
+    Desatracados/Omitidos/Todos), pra descobrir os seletores certos pra
+    acessar os dados confirmados de operação. Remover esse endpoint
+    depois de usar."""
+    from playwright.sync_api import sync_playwright
+
+    from .scrapers.base import run_in_thread
+    from .scrapers.embraport import URL
+
+    def _inspecionar():
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(URL, wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(5000)
+            try:
+                page.get_by_text("Filtros", exact=True).first.click(timeout=10000)
+                page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            inputs_html = page.eval_on_selector_all(
+                "input", "els => els.map(e => e.outerHTML)"
+            )
+            abas_html = page.eval_on_selector_all(
+                "button, a, li, span, label",
+                """els => els
+                    .filter(e => /^(previstos|em opera[cç][aã]o|desatracados|omitidos|todos)$/i
+                        .test(e.textContent.trim()))
+                    .map(e => e.outerHTML)""",
+            )
+            browser.close()
+            return {"inputs": inputs_html, "abas": abas_html}
+
+    return run_in_thread(_inspecionar)
+
+
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
