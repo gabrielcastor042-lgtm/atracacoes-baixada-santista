@@ -186,4 +186,34 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/debug/embraport_headers")
+def debug_embraport_headers():
+    """TEMPORÁRIO: inspeciona os cabeçalhos reais da tabela da Embraport
+    pra descobrir os nomes das colunas com dados confirmados (atracação
+    real, operação, saída) que o scraper ainda não captura. Remover esse
+    endpoint depois de usar."""
+    from bs4 import BeautifulSoup
+
+    from .scrapers.base import run_in_thread
+    from .scrapers.embraport import EmbraportScraper, _find_navio_table
+
+    scraper = EmbraportScraper()
+    html = run_in_thread(scraper._render)
+    soup = BeautifulSoup(html, "html.parser")
+    table = _find_navio_table(soup)
+    if table is None:
+        return {"erro": "tabela nao encontrada"}
+
+    header_row = table.find("thead") or table.find("tr")
+    headers = [
+        {"nomecoluna": th.get("nomecoluna"), "texto": th.get_text(strip=True)}
+        for th in header_row.find_all("th")
+    ]
+    bodies = table.find_all("tbody")
+    body = next((b for b in bodies if b.find("tr")), None) or table
+    primeira_linha = body.find("tr")
+    celulas = [td.get_text(strip=True) for td in primeira_linha.find_all("td")] if primeira_linha else []
+    return {"headers": headers, "primeira_linha": celulas}
+
+
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
