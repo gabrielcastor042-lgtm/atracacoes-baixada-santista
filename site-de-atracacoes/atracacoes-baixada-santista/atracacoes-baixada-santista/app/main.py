@@ -186,24 +186,76 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/debug/embraport_headers")
-def debug_embraport_headers():
-    """TEMPORÁRIO: inspeciona os cabeçalhos reais da tabela da Embraport
-    pra descobrir os nomes das colunas com dados confirmados (atracação
-    real, operação, saída) que o scraper ainda não captura. Remover esse
-    endpoint depois de usar."""
+@app.get("/debug/embraport_desatracados")
+def debug_embraport_desatracados():
+    """TEMPORÁRIO: preenche o filtro de Período Inicial (hoje - 30 dias),
+    seleciona a aba "Desatracados" e pesquisa, pra descobrir o formato de
+    data certo (evitando o bug de dados "STOPPAGE" falsos já visto antes)
+    e quais colunas de dados confirmados de operação aparecem nessa aba.
+    Remover esse endpoint depois de usar."""
+    from datetime import datetime, timedelta
+
     from bs4 import BeautifulSoup
+    from playwright.sync_api import sync_playwright
 
     from .scrapers.base import run_in_thread
-    from .scrapers.embraport import EmbraportScraper, _find_navio_table
+    from .scrapers.embraport import URL, _find_navio_table
 
-    scraper = EmbraportScraper()
-    html = run_in_thread(scraper._render)
+    data_inicial = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
+
+    def _inspecionar():
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(URL, wait_until="networkidle", timeout=60000)
+            page.wait_for_timeout(5000)
+
+            try:
+                page.get_by_text("Filtros", exact=True).first.click(timeout=10000)
+                page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            page.fill("#edDataInicial", data_inicial)
+            page.keyboard.press("Tab")
+            page.wait_for_timeout(500)
+            data_inicial_valor = page.eval_on_selector("#edDataInicial", "el => el.value")
+
+            page.get_by_text("Desatracados", exact=True).first.click(timeout=10000)
+            page.wait_for_timeout(500)
+
+            btn = page.get_by_text("Pesquisar", exact=True).first
+            btn.scroll_into_view_if_needed(timeout=10000)
+            page.wait_for_timeout(500)
+            btn.click(timeout=15000)
+            page.wait_for_load_state("networkidle", timeout=15000)
+
+            navio_table = page.locator('table:has(th[nomecoluna="NAVIO" i])')
+            previous_count = -1
+            stable_count = 0
+            for _ in range(20):
+                count = navio_table.locator("tbody tr").count()
+                if count > 0 and count == previous_count:
+                    stable_count = count
+                    break
+                previous_count = count
+                page.wait_for_timeout(2000)
+
+            html = navio_table.evaluate("el => el.outerHTML") if stable_count > 0 else ""
+            browser.close()
+            return html, data_inicial_valor, stable_count
+
+    html, data_inicial_valor, stable_count = run_in_thread(_inspecionar)
+    if not html:
+        return {
+            "erro": "tabela vazia ou nao encontrada",
+            "data_inicial_enviada": data_inicial,
+            "data_inicial_confirmada_no_campo": data_inicial_valor,
+            "linhas_estaveis": stable_count,
+        }
+
     soup = BeautifulSoup(html, "html.parser")
     table = _find_navio_table(soup)
-    if table is None:
-        return {"erro": "tabela nao encontrada"}
-
     header_row = table.find("thead") or table.find("tr")
     headers = [
         {"nomecoluna": th.get("nomecoluna"), "texto": th.get_text(strip=True)}
@@ -213,47 +265,13 @@ def debug_embraport_headers():
     body = next((b for b in bodies if b.find("tr")), None) or table
     primeira_linha = body.find("tr")
     celulas = [td.get_text(strip=True) for td in primeira_linha.find_all("td")] if primeira_linha else []
-    return {"headers": headers, "primeira_linha": celulas}
-
-
-@app.get("/debug/embraport_filtros")
-def debug_embraport_filtros():
-    """TEMPORÁRIO: expande o painel de Filtros da Embraport e devolve o
-    HTML dos campos de data e das abas de status (Previstos/Em Operação/
-    Desatracados/Omitidos/Todos), pra descobrir os seletores certos pra
-    acessar os dados confirmados de operação. Remover esse endpoint
-    depois de usar."""
-    from playwright.sync_api import sync_playwright
-
-    from .scrapers.base import run_in_thread
-    from .scrapers.embraport import URL
-
-    def _inspecionar():
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(URL, wait_until="networkidle", timeout=60000)
-            page.wait_for_timeout(5000)
-            try:
-                page.get_by_text("Filtros", exact=True).first.click(timeout=10000)
-                page.wait_for_timeout(1000)
-            except Exception:
-                pass
-
-            inputs_html = page.eval_on_selector_all(
-                "input", "els => els.map(e => e.outerHTML)"
-            )
-            abas_html = page.eval_on_selector_all(
-                "button, a, li, span, label",
-                """els => els
-                    .filter(e => /^(previstos|em opera[cç][aã]o|desatracados|omitidos|todos)$/i
-                        .test(e.textContent.trim()))
-                    .map(e => e.outerHTML)""",
-            )
-            browser.close()
-            return {"inputs": inputs_html, "abas": abas_html}
-
-    return run_in_thread(_inspecionar)
+    return {
+        "data_inicial_enviada": data_inicial,
+        "data_inicial_confirmada_no_campo": data_inicial_valor,
+        "linhas_estaveis": stable_count,
+        "headers": headers,
+        "primeira_linha": celulas,
+    }
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
