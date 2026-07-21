@@ -216,7 +216,10 @@ def debug_embraport_desatracados():
             except Exception:
                 pass
 
-            page.fill("#edDataInicial", data_inicial)
+            campo = page.locator("#edDataInicial")
+            campo.click()
+            campo.fill("")
+            page.keyboard.type(data_inicial, delay=80)
             page.keyboard.press("Tab")
             page.wait_for_timeout(500)
             data_inicial_valor = page.eval_on_selector("#edDataInicial", "el => el.value")
@@ -241,6 +244,19 @@ def debug_embraport_desatracados():
                 previous_count = count
                 page.wait_for_timeout(2000)
 
+            # rola até o fim (scroll infinito) pra pegar uma amostra maior
+            if stable_count > 0:
+                rows_locator = navio_table.locator("tbody tr")
+                last_count = stable_count
+                for _ in range(10):
+                    rows_locator.last.scroll_into_view_if_needed(timeout=5000)
+                    page.wait_for_timeout(2000)
+                    new_count = rows_locator.count()
+                    if new_count <= last_count:
+                        break
+                    last_count = new_count
+                stable_count = last_count
+
             html = navio_table.evaluate("el => el.outerHTML") if stable_count > 0 else ""
             browser.close()
             return html, data_inicial_valor, stable_count
@@ -263,14 +279,15 @@ def debug_embraport_desatracados():
     ]
     bodies = table.find_all("tbody")
     body = next((b for b in bodies if b.find("tr")), None) or table
-    primeira_linha = body.find("tr")
-    celulas = [td.get_text(strip=True) for td in primeira_linha.find_all("td")] if primeira_linha else []
+    amostra = []
+    for tr in body.find_all("tr")[:8]:
+        amostra.append([td.get_text(strip=True) for td in tr.find_all("td")])
     return {
         "data_inicial_enviada": data_inicial,
         "data_inicial_confirmada_no_campo": data_inicial_valor,
         "linhas_estaveis": stable_count,
         "headers": headers,
-        "primeira_linha": celulas,
+        "amostra": amostra,
     }
 
 
