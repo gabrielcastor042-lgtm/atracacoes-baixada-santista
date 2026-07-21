@@ -278,7 +278,12 @@ class EmbraportScraper(TerminalScraper):
 
         rows_out: List[Dict[str, Any]] = []
         for linha in linhas:
-            record: Dict[str, Any] = {"terminal": self.terminal_id}
+            # "ata" nunca é preenchido por esse scraper (ver docstring do
+            # módulo) — fica explícito em None pra limpar qualquer valor
+            # antigo que tenha ficado gravado no banco por uma versão
+            # anterior do parser, já que o upsert só sobrescreve as
+            # chaves presentes no dict.
+            record: Dict[str, Any] = {"terminal": self.terminal_id, "ata": None}
             for header_texto, texto in linha.items():
                 field = _TEXT_MAP.get(header_texto)
                 if field is None:
