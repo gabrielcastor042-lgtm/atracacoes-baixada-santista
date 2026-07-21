@@ -54,7 +54,10 @@ def _valor_exportado(row: Atracacao, col: str) -> Any:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    run_sync()  # primeira carga ao subir
+    # A primeira sincronização roda em segundo plano (disparada pelo
+    # scheduler), pra não travar a porta do servidor esperando o scraping
+    # terminar — isso causava timeout de deploy no Render quando algum
+    # terminal estava lento/instável.
     start_scheduler()
     yield
 
