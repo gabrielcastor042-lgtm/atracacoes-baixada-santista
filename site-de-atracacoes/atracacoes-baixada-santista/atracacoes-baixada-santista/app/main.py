@@ -113,7 +113,7 @@ def exportar(
     for row in rows:
         ws.append([_valor_exportado(row, col) for col, _ in _EXPORT_COLUMNS])
 
-    date_format = 'DD/MM/YYYY " - "HH:MM'
+    date_format = "DD/MM/YYYY HH:MM"
     for col_index, (col, _) in enumerate(_EXPORT_COLUMNS, start=1):
         letter = get_column_letter(col_index)
         ws.column_dimensions[letter].width = 20
@@ -159,9 +159,12 @@ async def upload_santos_brasil(
     records = merge_gate_data(records, gate_por_id)
 
     with get_session() as session:
-        sincronizar_terminal(session, "santos_brasil", records)
+        aviso = sincronizar_terminal(session, "santos_brasil", records)
         session.commit()
-        registrar_status(session, "santos_brasil", len(records))
+        if aviso:
+            registrar_status(session, "santos_brasil", erro=aviso)
+        else:
+            registrar_status(session, "santos_brasil", len(records))
 
     com_gate = sum(1 for r in records if r.get("abertura_gate") or r.get("previsao_abertura_gate"))
     return {"terminal": "santos_brasil", "registros": len(records), "com_gate": com_gate}
