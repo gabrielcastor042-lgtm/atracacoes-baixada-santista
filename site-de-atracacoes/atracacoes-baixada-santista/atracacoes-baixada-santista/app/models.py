@@ -42,6 +42,10 @@ class Atracacao(SQLModel, table=True):
     # Metadados de sincronização
     fonte_raw_id: Optional[str] = None  # id/RAP original do terminal, p/ dedupe
     atualizado_em: datetime = Field(default_factory=agora_brasilia)
+    # Quando o navio deixou de aparecer na leitura do terminal (None
+    # enquanto ele continua aparecendo). É removido do banco só depois de
+    # ficar SUMIDO_GRACE_DAYS dias seguidos sumido — ver sync.py.
+    sumido_em: Optional[datetime] = None
 
     class Config:
         arbitrary_types_allowed = True
