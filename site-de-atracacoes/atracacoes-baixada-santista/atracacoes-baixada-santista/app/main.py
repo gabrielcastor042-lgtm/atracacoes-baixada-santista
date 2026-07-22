@@ -16,11 +16,13 @@ from sqlmodel import select
 from .database import get_session, init_db
 from .models import Atracacao, SyncStatus
 from .scheduler import start_scheduler
+from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio
 from .scrapers.santos_brasil import merge_gate_data, parse_gate_upload, parse_upload
 from .sync import registrar_status, run_sync, sincronizar_terminal
 
 # (chave da coluna, cabeçalho na planilha)
 _EXPORT_COLUMNS = [
+    ("rap", "RAP"),
     ("navio", "Navio"),
     ("viagem", "Viagem"),
     ("terminal", "Terminal"),
@@ -160,6 +162,12 @@ async def upload_santos_brasil(
     conteudo_gate = await arquivo_gate.read()
     gate_por_id = parse_gate_upload(conteudo_gate)
     records = merge_gate_data(records, gate_por_id)
+
+    try:
+        rap_lookup = fetch_rap_por_navio()
+        enriquecer_com_rap(records, "santos_brasil", rap_lookup)
+    except Exception:
+        pass  # RAP é um complemento — não impede o upload de seguir
 
     with get_session() as session:
         aviso = sincronizar_terminal(session, "santos_brasil", records)
