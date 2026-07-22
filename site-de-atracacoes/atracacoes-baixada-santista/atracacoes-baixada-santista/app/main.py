@@ -194,4 +194,31 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/debug/rap_lookup")
+def debug_rap_lookup():
+    """TEMPORÁRIO: inspeciona o resultado bruto da consulta de RAP na
+    Autoridade Portuária, pra descobrir por que DP World/Santos Brasil
+    não estão casando. Remover depois de usar."""
+    try:
+        lookup = fetch_rap_por_navio()
+    except Exception as exc:  # noqa: BLE001
+        return {"erro": str(exc)}
+
+    with get_session() as session:
+        navios_dp_world = [
+            r.navio for r in session.exec(
+                select(Atracacao).where(Atracacao.terminal == "dp_world")
+            ).all()
+        ][:10]
+
+    from .scrapers.porto_santos import normalizar_navio
+
+    return {
+        "tamanhos": {k: len(v) for k, v in lookup.items()},
+        "amostra_dp_world_lookup": dict(list(lookup.get("dp_world", {}).items())[:10]),
+        "navios_nosso_banco_dp_world": navios_dp_world,
+        "navios_nosso_banco_dp_world_normalizados": [normalizar_navio(n) for n in navios_dp_world],
+    }
+
+
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
