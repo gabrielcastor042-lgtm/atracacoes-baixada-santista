@@ -32,9 +32,11 @@ Limitações conhecidas:
 from __future__ import annotations
 
 import re
+import warnings
 from typing import Any, Dict, List
 
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 
 URL = (
@@ -72,7 +74,20 @@ def fetch_rap_por_navio() -> Dict[str, Dict[str, str]]:
     de atracações programadas da Autoridade Portuária."""
     resultado: Dict[str, Dict[str, str]] = {tid: {} for tid in set(_LOCAL_PARA_TERMINAL.values())}
 
-    resp = requests.get(URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        resp = requests.get(URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    except requests.exceptions.SSLError:
+        # O certificado desse site não vem com a cadeia completa (erro
+        # "unable to get local issuer certificate") — navegadores toleram
+        # isso buscando o certificado intermediário à parte, mas o
+        # requests/OpenSSL não. Como é uma consulta pública, só de
+        # leitura e sem credenciais, seguimos sem verificar o certificado
+        # nesse caso específico em vez de perder o RAP inteiro.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", urllib3.exceptions.InsecureRequestWarning)
+            resp = requests.get(
+                URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"}, verify=False
+            )
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
