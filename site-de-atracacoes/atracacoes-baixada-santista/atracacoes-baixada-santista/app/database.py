@@ -26,17 +26,25 @@ def init_db() -> None:
     _ensure_columns()
 
 
+# (coluna, tipo SQL) adicionadas depois da criação inicial da tabela.
+_COLUNAS_NOVAS = [
+    ("sumido_em", "TIMESTAMP"),
+    ("rap", "VARCHAR"),
+]
+
+
 def _ensure_columns() -> None:
     """create_all() só cria tabelas que ainda não existem — não adiciona
     colunas novas a uma tabela já existente. Como o projeto não usa uma
     ferramenta de migração (Alembic etc.), aplicamos aqui os poucos ALTER
     TABLE necessários quando o schema evolui; se a coluna já existir, o
     erro é ignorado."""
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE atracacoes ADD COLUMN sumido_em TIMESTAMP"))
-    except (OperationalError, ProgrammingError):
-        pass
+    for coluna, tipo in _COLUNAS_NOVAS:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE atracacoes ADD COLUMN {coluna} {tipo}"))
+        except (OperationalError, ProgrammingError):
+            pass
 
 
 def get_session() -> Session:
