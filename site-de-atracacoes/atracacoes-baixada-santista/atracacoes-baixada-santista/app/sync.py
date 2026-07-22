@@ -11,6 +11,7 @@ from .models import Atracacao, SyncStatus
 from .scrapers.base import TerminalScraper
 from .scrapers.btp import BTPScraper
 from .scrapers.embraport import EmbraportScraper
+from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio
 from .timezone import agora_brasilia
 
 logger = logging.getLogger("sync")
@@ -130,6 +131,16 @@ def registrar_status(
 def run_sync() -> dict:
     init_db()
     results = {}
+
+    # Consultado uma única vez por rodada e compartilhado entre os
+    # terminais (evita repetir a mesma requisição). Se falhar, seguimos
+    # sem RAP nessa rodada — não é motivo pra derrubar a sincronização.
+    try:
+        rap_lookup = fetch_rap_por_navio()
+    except Exception:
+        logger.warning("Falha ao consultar RAP na Autoridade Portuária de Santos", exc_info=True)
+        rap_lookup = {}
+
     with get_session() as session:
         for scraper in ACTIVE_SCRAPERS:
             try:
@@ -142,6 +153,14 @@ def run_sync() -> dict:
                     raise RuntimeError(
                         "Nenhum registro retornado (provável falha temporária no site do terminal)"
                     )
+
+                if scraper.terminal_id == "btp":
+                    # A BTP já expõe o RAP na própria consulta.
+                    for record in records:
+                        record["rap"] = record.get("fonte_raw_id")
+                else:
+                    enriquecer_com_rap(records, scraper.terminal_id, rap_lookup)
+
                 aviso = sincronizar_terminal(session, scraper.terminal_id, records)
                 session.commit()
                 results[scraper.terminal_id] = len(records)
