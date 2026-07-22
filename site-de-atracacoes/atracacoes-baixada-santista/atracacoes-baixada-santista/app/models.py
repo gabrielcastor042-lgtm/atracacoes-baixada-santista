@@ -25,6 +25,11 @@ class Atracacao(SQLModel, table=True):
     viagem: Optional[str] = Field(default=None, index=True)
     terminal: str = Field(index=True)  # santos_brasil | dp_world | btp | ecoporto
     berco: Optional[str] = None        # "Terminal de atracação" / berço físico
+    # RAP (Registro de Atracação Programada): na BTP vem direto do
+    # terminal (fonte_raw_id); nos demais, é casado por nome do navio
+    # contra a lista pública da Autoridade Portuária de Santos — ver
+    # app/scrapers/porto_santos.py.
+    rap: Optional[str] = None
 
     # Prazos operacionais
     deadline_carga: Optional[datetime] = None
