@@ -56,6 +56,17 @@ def normalizar_navio(nome: str) -> str:
     return re.sub(r"\s+", " ", sem_parenteses).strip().upper()
 
 
+def _formatar_rap(bruto: str) -> str:
+    """A coluna "Viagem" vem como "3365/2026" — padroniza pro mesmo
+    formato usado em toda a plataforma (5 dígitos + espaço duplo + ano,
+    igual ao que a BTP mostra), pra ficar consistente entre terminais e
+    fácil de copiar e colar no sistema interno da empresa."""
+    numero, _, ano = bruto.partition("/")
+    if not ano:
+        return bruto
+    return f"{numero.strip().zfill(5)}  {ano.strip()}"
+
+
 def fetch_rap_por_navio() -> Dict[str, Dict[str, str]]:
     """Devolve {terminal_id: {navio_normalizado: rap}} a partir da lista
     de atracações programadas da Autoridade Portuária."""
@@ -77,9 +88,10 @@ def fetch_rap_por_navio() -> Dict[str, Dict[str, str]]:
                 continue
 
             navio_norm = normalizar_navio(navio)
+            rap_formatado = _formatar_rap(rap)
             for palavra, terminal_id in _LOCAL_PARA_TERMINAL.items():
                 if palavra in local:
-                    resultado[terminal_id][navio_norm] = rap
+                    resultado[terminal_id][navio_norm] = rap_formatado
 
     return resultado
 
