@@ -4,7 +4,7 @@ import logging
 from datetime import timedelta
 from typing import List, Optional
 
-from sqlmodel import select
+from sqlmodel import func, select
 
 from .database import get_session, init_db
 from .models import Atracacao, SyncStatus
@@ -111,6 +111,16 @@ def sincronizar_terminal(session, terminal_id: str, records: List[dict]) -> Opti
     return None
 
 
+def contar_ativos(session, terminal_id: str) -> int:
+    """Quantos navios desse terminal estão de fato no banco agora — usado
+    pro status mostrado no site, pra não confundir com o tamanho de uma
+    leitura pontual (que pode vir parcial por instabilidade do site do
+    terminal, mesmo sem erro, e nesses casos a carência de 30 dias já
+    protege os dados; só o número mostrado ficava enganoso)."""
+    stmt = select(func.count()).select_from(Atracacao).where(Atracacao.terminal == terminal_id)
+    return session.exec(stmt).one()
+
+
 def registrar_status(
     session, terminal: str, registros: Optional[int] = None, erro: Optional[str] = None
 ) -> None:
@@ -170,12 +180,16 @@ def run_sync() -> dict:
 
                 aviso = sincronizar_terminal(session, scraper.terminal_id, records)
                 session.commit()
-                results[scraper.terminal_id] = len(records)
-                logger.info("Sincronizado %s: %d registros", scraper.terminal_id, len(records))
+                total_atual = contar_ativos(session, scraper.terminal_id)
+                results[scraper.terminal_id] = total_atual
+                logger.info(
+                    "Sincronizado %s: %d registros lidos, %d ativos no banco",
+                    scraper.terminal_id, len(records), total_atual,
+                )
                 if aviso:
                     registrar_status(session, scraper.terminal_id, erro=aviso)
                 else:
-                    registrar_status(session, scraper.terminal_id, len(records))
+                    registrar_status(session, scraper.terminal_id, total_atual)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Falha ao sincronizar %s", scraper.terminal_id)
                 results[scraper.terminal_id] = f"erro: {exc}"
