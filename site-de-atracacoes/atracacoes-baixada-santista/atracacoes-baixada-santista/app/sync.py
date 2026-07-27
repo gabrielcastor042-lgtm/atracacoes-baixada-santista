@@ -36,7 +36,12 @@ ACTIVE_SCRAPERS: List[TerminalScraper] = [
 def _upsert(session, record: dict) -> None:
     """Dedupe por (terminal, navio, viagem). Se já existir, atualiza; senão, insere.
     Só é chamado para registros presentes na leitura atual, então sempre
-    limpa `sumido_em` (o navio voltou a aparecer no terminal)."""
+    limpa `sumido_em` (o navio voltou a aparecer no terminal).
+
+    Um valor None no registro novo NUNCA apaga um valor já conhecido no
+    banco — alguns terminais somem com a previsão (ETA/ETB/ETD) do
+    próprio site assim que a confirmação real (ATA/ATB/ATD) acontece, e
+    sem essa checagem a previsão seria perdida na sincronização seguinte."""
     stmt = select(Atracacao).where(
         Atracacao.terminal == record.get("terminal"),
         Atracacao.navio == record.get("navio"),
@@ -46,6 +51,8 @@ def _upsert(session, record: dict) -> None:
 
     if existing:
         for key, value in record.items():
+            if value is None:
+                continue
             setattr(existing, key, value)
         existing.atualizado_em = agora_brasilia()
         existing.sumido_em = None
