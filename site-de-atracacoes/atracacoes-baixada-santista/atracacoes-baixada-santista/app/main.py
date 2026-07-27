@@ -18,7 +18,7 @@ from .models import Atracacao, SyncStatus
 from .scheduler import start_scheduler
 from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio
 from .scrapers.santos_brasil import merge_gate_data, parse_gate_upload, parse_upload
-from .sync import registrar_status, run_sync, sincronizar_terminal
+from .sync import contar_ativos, registrar_status, run_sync, sincronizar_terminal
 
 # (chave da coluna, cabeçalho na planilha)
 _EXPORT_COLUMNS = [
@@ -172,13 +172,14 @@ async def upload_santos_brasil(
     with get_session() as session:
         aviso = sincronizar_terminal(session, "santos_brasil", records)
         session.commit()
+        total_atual = contar_ativos(session, "santos_brasil")
         if aviso:
             registrar_status(session, "santos_brasil", erro=aviso)
         else:
-            registrar_status(session, "santos_brasil", len(records))
+            registrar_status(session, "santos_brasil", total_atual)
 
     com_gate = sum(1 for r in records if r.get("abertura_gate") or r.get("previsao_abertura_gate"))
-    return {"terminal": "santos_brasil", "registros": len(records), "com_gate": com_gate}
+    return {"terminal": "santos_brasil", "registros": total_atual, "com_gate": com_gate}
 
 
 @app.get("/status", response_model=List[SyncStatus])
