@@ -66,7 +66,7 @@ class BTPScraper(TerminalScraper):
     terminal_id = "btp"
 
     def fetch(self) -> List[Dict[str, Any]]:
-        html = run_in_thread(self._render)
+        html = run_in_thread(self._render, timeout=150)
         return self._parse(html)
 
     def _render(self) -> str:
@@ -101,7 +101,7 @@ class BTPScraper(TerminalScraper):
             _normalize_header(th.get_text()) for th in table.find("tr").find_all(["th"])
         ]
 
-              # A página tem uma segunda tabela idêntica (versão desktop/mobile);
+        # A página tem uma segunda tabela idêntica (versão desktop/mobile);
         # como usamos só a primeira (soup.find("table")), não há duplicidade
         # a resolver aqui — o dedupe de verdade (por terminal+navio+viagem)
         # já acontece no banco, em app.sync._upsert.
@@ -117,6 +117,16 @@ class BTPScraper(TerminalScraper):
                 field = HEADER_MAP.get(header)
                 if field is None:
                     continue
+
+                if field == "fonte_raw_id":
+                    # A célula de RAP vem em 2 linhas ("03365" / "2026").
+                    # Mantém o formato com espaço duplo (igual ao portal da
+                    # BTP) — o usuário prefere assim pra copiar e colar
+                    # direto no sistema interno da empresa.
+                    texto_bruto = cell.get_text(separator=" ", strip=True)
+                    record[field] = re.sub(r"\s+", "  ", texto_bruto) or None
+                    continue
+
                 text = cell.get_text(strip=True)
                 if field in {
                     "deadline_carga", "abertura_gate", "previsao_abertura_gate",
@@ -129,7 +139,7 @@ class BTPScraper(TerminalScraper):
             if record.get("navio"):
                 rows_out.append(record)
 
-        return rows_out  
+        return rows_out
 
 
 if __name__ == "__main__":
