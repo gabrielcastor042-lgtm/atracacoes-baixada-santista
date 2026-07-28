@@ -195,4 +195,29 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/debug/embraport_linhas")
+def debug_embraport_linhas():
+    """TEMPORÁRIO: mostra os cabeçalhos e algumas linhas cruas da aba
+    "Todos" da Embraport agora, pra investigar por que a Previsão de
+    Atracação (ETB) está vindo errada/vazia pra alguns navios. Remover
+    depois de usar."""
+    from .scrapers.base import run_in_thread
+    from .scrapers.embraport import EmbraportScraper, _linhas_com_texto
+
+    scraper = EmbraportScraper()
+    html = run_in_thread(lambda: scraper._render("Todos"))
+    headers, linhas = _linhas_com_texto(html)
+
+    alvo = {"stephanie c", "san antonio maersk"}
+    linhas_alvo = [
+        linha for linha in linhas if linha.get("navio", "").strip().lower() in alvo
+    ]
+
+    return {
+        "headers": headers,
+        "total_linhas": len(linhas),
+        "linhas_alvo": linhas_alvo,
+    }
+
+
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
