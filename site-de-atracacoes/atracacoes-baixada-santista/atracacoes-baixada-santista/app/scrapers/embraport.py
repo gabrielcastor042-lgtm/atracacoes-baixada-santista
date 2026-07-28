@@ -260,10 +260,17 @@ class EmbraportScraper(TerminalScraper):
                 stable_count = last_count
 
             if stable_count > 0:
-                # Pega o outerHTML da tabela diretamente, no exato momento
-                # em que sabemos que está estável — page.content() (a
-                # página inteira) chega tarde demais, o app já limpou a
-                # tabela de novo até lá.
+                # Algumas colunas (ex.: Previsão de Atracação) parecem ser
+                # calculadas de forma assíncrona depois que as linhas já
+                # apareceram e a contagem já estabilizou — sem essa espera
+                # extra, a célula às vezes é capturada ainda vazia mesmo
+                # quando o site já mostra o valor visualmente.
+                page.wait_for_timeout(6000)
+
+                # Pega o outerHTML da tabela diretamente, no momento em
+                # que sabemos que está estável — page.content() (a página
+                # inteira) chega tarde demais, o app já limpou a tabela de
+                # novo até lá.
                 html = navio_table.evaluate("el => el.outerHTML")
             else:
                 html = ""
