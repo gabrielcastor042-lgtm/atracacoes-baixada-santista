@@ -37,6 +37,11 @@ Mesmo com o filtro certo, a aba retorna algumas linhas de navios ainda
 não atracados (ruído) — por isso só confiamos numa linha quando a coluna
 "Atracado" vem preenchida.
 
+IMPORTANTE: sem esse filtro preenchido, a própria aba "Todos" devolve a
+"Previsão de Atracação" desatualizada/errada (confirmado comparando com
+o site ao vivo) — por isso ele é preenchido nas duas consultas agora, não
+só na de "Desatracados".
+
 A página tem outras tabelas que não são a de navios — uma de lookup
 (0 colunas, pares ['Viagem', 'Sigla Navio']) e, se a Data Inicial for
 preenchida com um valor que o app não reconhece, uma de registros
@@ -161,11 +166,19 @@ class EmbraportScraper(TerminalScraper):
     terminal_id = "dp_world"
 
     def fetch(self) -> List[Dict[str, Any]]:
-        html_previstos = run_in_thread(lambda: self._render("Todos"), timeout=150)
+        data_inicial = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
+
+        # Sem o filtro "Período Inicial" preenchido, a "Previsão de
+        # Atracação" que o site devolve na aba "Todos" fica desatualizada/
+        # errada (confirmado comparando com o site ao vivo, que só mostra
+        # o valor certo quando esse filtro está preenchido) — por isso
+        # preenchemos aqui também, e não só na consulta de "Desatracados".
+        html_previstos = run_in_thread(
+            lambda: self._render("Todos", data_inicial), timeout=150
+        )
         records = self._parse(html_previstos)
 
         try:
-            data_inicial = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
             html_confirmados = run_in_thread(
                 lambda: self._render("Desatracados", data_inicial), timeout=150
             )
