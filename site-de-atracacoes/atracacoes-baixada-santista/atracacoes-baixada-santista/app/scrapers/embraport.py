@@ -161,13 +161,13 @@ class EmbraportScraper(TerminalScraper):
     terminal_id = "dp_world"
 
     def fetch(self) -> List[Dict[str, Any]]:
-        html_previstos = run_in_thread(lambda: self._render("Todos"))
+        html_previstos = run_in_thread(lambda: self._render("Todos"), timeout=150)
         records = self._parse(html_previstos)
 
         try:
             data_inicial = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
             html_confirmados = run_in_thread(
-                lambda: self._render("Desatracados", data_inicial)
+                lambda: self._render("Desatracados", data_inicial), timeout=150
             )
             confirmados = _parse_confirmados(html_confirmados)
             for record in records:
