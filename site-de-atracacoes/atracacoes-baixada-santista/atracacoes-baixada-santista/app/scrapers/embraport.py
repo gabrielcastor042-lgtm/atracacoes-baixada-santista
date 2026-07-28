@@ -37,11 +37,6 @@ Mesmo com o filtro certo, a aba retorna algumas linhas de navios ainda
 não atracados (ruído) — por isso só confiamos numa linha quando a coluna
 "Atracado" vem preenchida.
 
-IMPORTANTE: sem esse filtro preenchido, a própria aba "Todos" devolve a
-"Previsão de Atracação" desatualizada/errada (confirmado comparando com
-o site ao vivo) — por isso ele é preenchido nas duas consultas agora, não
-só na de "Desatracados".
-
 A página tem outras tabelas que não são a de navios — uma de lookup
 (0 colunas, pares ['Viagem', 'Sigla Navio']) e, se a Data Inicial for
 preenchida com um valor que o app não reconhece, uma de registros
@@ -68,6 +63,14 @@ URL = "https://www.embraportonline.com.br/Navios/Escala"
 # Chave = texto visível do cabeçalho (minúsculo). Coluna ausente daqui =
 # ignorada (não faz parte do schema unificado, é redundante, ou é
 # ambígua demais pra confiar — ver docstring do módulo).
+#
+# "previsão chegada" e "previsão de atracação" mapeiam TROCADOS de
+# propósito: confirmado comparando com o modal de "Detalhes" do próprio
+# site (que usa outro template, sem o bug de nomecoluna duplicado) que a
+# tabela principal exibe esses dois rótulos invertidos — o valor que ela
+# chama de "Previsão de Atracação" é, na verdade, a previsão de chegada
+# (e vice-versa). Sem essa troca, ETB aparecia antes do ETA, o que não
+# faz sentido (um navio não atraca antes de chegar).
 _TEXT_MAP = {
     "navio": "navio",
     "viagem": "viagem",
@@ -76,8 +79,8 @@ _TEXT_MAP = {
     "previsão de abertura gate": "previsao_abertura_gate",
     "abertura de gate": "abertura_gate",
     "deadline (armador)": "deadline_carga",
-    "previsão chegada": "eta",
-    "previsão de atracação": "etb",
+    "previsão chegada": "etb",
+    "previsão de atracação": "eta",
     "previsão de saída": "etd",
 }
 
@@ -166,19 +169,16 @@ class EmbraportScraper(TerminalScraper):
     terminal_id = "dp_world"
 
     def fetch(self) -> List[Dict[str, Any]]:
-        data_inicial = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
-
-        # Sem o filtro "Período Inicial" preenchido, a "Previsão de
-        # Atracação" que o site devolve na aba "Todos" fica desatualizada/
-        # errada (confirmado comparando com o site ao vivo, que só mostra
-        # o valor certo quando esse filtro está preenchido) — por isso
-        # preenchemos aqui também, e não só na consulta de "Desatracados".
-        html_previstos = run_in_thread(
-            lambda: self._render("Todos", data_inicial), timeout=150
-        )
+        # Testado preencher o filtro "Período Inicial" também na consulta
+        # de "Todos" (achando que isso explicava a "Previsão de Atracação"
+        # divergente do que o site mostra pro usuário) — não fez diferença
+        # nenhuma no valor retornado, então não é a causa. Mantido só na
+        # consulta de "Desatracados", que é onde ele realmente é exigido.
+        html_previstos = run_in_thread(lambda: self._render("Todos"), timeout=150)
         records = self._parse(html_previstos)
 
         try:
+            data_inicial = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
             html_confirmados = run_in_thread(
                 lambda: self._render("Desatracados", data_inicial), timeout=150
             )
