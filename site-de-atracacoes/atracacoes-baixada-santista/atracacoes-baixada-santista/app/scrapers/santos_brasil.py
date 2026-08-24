@@ -128,17 +128,17 @@ def parse_upload(content: bytes) -> List[Dict[str, Any]]:
     if table is None:
         return []
 
-    # Nem sempre a tabela vem com <thead> (variação já vista num export) —
-    # sem essa alternativa, table.find("thead") vira None e o .find_all()
-    # seguinte quebra com "'NoneType' object has no attribute 'find_all'".
-    header_row = table.find("thead") or table.find("tr")
-    if header_row is None:
-        return []
-
+    # Busca os <th> em qualquer lugar dentro da tabela — variações já
+    # vistas: com <thead>, sem <thead> mas dentro de um <tr>, e (mais
+    # recente) soltos direto dentro da <table>, sem nenhum <tr> ao redor.
+    # Amarrar a busca a thead/tr específico já quebrou 2 vezes com
+    # exports diferentes; buscar por <th> direto funciona nos 3 casos.
     headers = [
         (th.get("data-col") or "").strip().lower()
-        for th in header_row.find_all("th")
+        for th in table.find_all("th")
     ]
+    if not headers:
+        return []
 
     rows_out: List[Dict[str, Any]] = []
     for tr in table.find_all("tr"):

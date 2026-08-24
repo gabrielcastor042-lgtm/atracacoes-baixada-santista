@@ -28,6 +28,9 @@ SUMIDO_GRACE_DAYS = 30
 # listados por semanas), removemos direto pela data real de ATB/ATD: se
 # já passou desse tanto de dias desde a atracação/saída confirmada, o
 # registro sai do banco independente de ainda aparecer na fonte ou não.
+# O mesmo prazo também é usado como referência quando nem ATA, ATB nem
+# ATD nunca foram preenchidos (a Autoridade Portuária de Santos às vezes
+# omite esses eventos) — nesse caso usamos o ETA como base.
 ATB_ATD_GRACE_DAYS = 30
 
 # Adicione aqui novos scrapers assim que estiverem prontos:
@@ -119,17 +122,29 @@ def sincronizar_terminal(session, terminal_id: str, records: List[dict]) -> Opti
     return None
 
 
-def remover_atb_atd_antigos(session) -> int:
-    """Remove atracações cujo evento confirmado mais recente (ATD, ou ATB
-    quando não há ATD) já passou de ATB_ATD_GRACE_DAYS dias — direto pela
-    data real, sem depender do navio ter sumido da leitura do terminal
-    primeiro (alguns terminais mantêm navios já operados na listagem por
-    semanas, o que atrasava demais a carência antiga)."""
+def remover_atracacoes_antigas(session) -> int:
+    """Remove atracações obsoletas, direto pela data real (sem depender do
+    navio ter sumido da leitura do terminal primeiro — alguns terminais
+    mantêm navios já operados na listagem por semanas, o que atrasava
+    demais a carência antiga baseada só em `sumido_em`). Dois critérios:
+
+    1. O evento confirmado mais recente (ATD, ou ATB quando não há ATD)
+       já passou de ATB_ATD_GRACE_DAYS dias.
+    2. Nenhum evento real (ATA/ATB/ATD) foi preenchido — a Autoridade
+       Portuária de Santos às vezes omite esses dados — mas o ETA já
+       passou do mesmo prazo, então o registro claramente ficou parado/
+       obsoleto."""
     limite = agora_brasilia() - timedelta(days=ATB_ATD_GRACE_DAYS)
     stmt = select(Atracacao).where(
         or_(
             Atracacao.atd < limite,
             (Atracacao.atd.is_(None)) & (Atracacao.atb < limite),  # type: ignore[union-attr]
+            (
+                Atracacao.ata.is_(None)
+                & Atracacao.atb.is_(None)
+                & Atracacao.atd.is_(None)
+                & (Atracacao.eta < limite)
+            ),
         )
     )
     antigos = session.exec(stmt).all()
@@ -224,11 +239,11 @@ def run_sync() -> dict:
 
         # Roda pra todos os terminais de uma vez (inclusive Santos Brasil,
         # que só é atualizada pelo upload manual, não pelos scrapers acima).
-        removidos = remover_atb_atd_antigos(session)
+        removidos = remover_atracacoes_antigas(session)
         if removidos:
             session.commit()
             logger.info(
-                "Removidas %d atracação(ões) com ATB/ATD há mais de %d dias",
+                "Removidas %d atracação(ões) obsoletas (ATB/ATD ou ETA há mais de %d dias)",
                 removidos, ATB_ATD_GRACE_DAYS,
             )
     return results
