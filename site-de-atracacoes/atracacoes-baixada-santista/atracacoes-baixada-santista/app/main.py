@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, List, Optional
@@ -19,6 +20,8 @@ from .scheduler import start_scheduler
 from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio
 from .scrapers.santos_brasil import merge_gate_data, parse_gate_upload, parse_upload
 from .sync import contar_ativos, registrar_status, run_sync, sincronizar_terminal
+
+logger = logging.getLogger("main")
 
 # (chave da coluna, cabeçalho na planilha)
 _EXPORT_COLUMNS = [
@@ -154,29 +157,39 @@ async def upload_santos_brasil(
     da Santos Brasil — a planilha (.xls) principal e o relatório de
     liberação de gate (salvo como .html) — e sincroniza os navios no
     banco, já complementados com o dado de gate."""
-    conteudo_excel = await arquivo_excel.read()
-    records = parse_upload(conteudo_excel)
-    if not records:
-        raise HTTPException(422, "Nenhum navio encontrado na planilha (.xls) enviada.")
-
-    conteudo_gate = await arquivo_gate.read()
-    gate_por_id = parse_gate_upload(conteudo_gate)
-    records = merge_gate_data(records, gate_por_id)
-
     try:
-        rap_lookup = fetch_rap_por_navio()
-        enriquecer_com_rap(records, "santos_brasil", rap_lookup)
-    except Exception:
-        pass  # RAP é um complemento — não impede o upload de seguir
+        conteudo_excel = await arquivo_excel.read()
+        records = parse_upload(conteudo_excel)
+        if not records:
+            raise HTTPException(422, "Nenhum navio encontrado na planilha (.xls) enviada.")
 
-    with get_session() as session:
-        aviso = sincronizar_terminal(session, "santos_brasil", records)
-        session.commit()
-        total_atual = contar_ativos(session, "santos_brasil")
-        if aviso:
-            registrar_status(session, "santos_brasil", erro=aviso)
-        else:
-            registrar_status(session, "santos_brasil", total_atual)
+        conteudo_gate = await arquivo_gate.read()
+        gate_por_id = parse_gate_upload(conteudo_gate)
+        records = merge_gate_data(records, gate_por_id)
+
+        try:
+            rap_lookup = fetch_rap_por_navio()
+            enriquecer_com_rap(records, "santos_brasil", rap_lookup)
+        except Exception:
+            pass  # RAP é um complemento — não impede o upload de seguir
+
+        with get_session() as session:
+            aviso = sincronizar_terminal(session, "santos_brasil", records)
+            session.commit()
+            total_atual = contar_ativos(session, "santos_brasil")
+            if aviso:
+                registrar_status(session, "santos_brasil", erro=aviso)
+            else:
+                registrar_status(session, "santos_brasil", total_atual)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        # Sem isso, um erro inesperado aqui vira uma resposta HTML/texto
+        # puro do próprio servidor ("Internal Server Error"), que o
+        # navegador não consegue interpretar como JSON — a tela só
+        # mostrava um erro genérico e ilegível de parsing.
+        logger.exception("Falha ao processar upload da Santos Brasil")
+        raise HTTPException(500, f"Erro ao processar os arquivos: {exc}") from exc
 
     com_gate = sum(1 for r in records if r.get("abertura_gate") or r.get("previsao_abertura_gate"))
     return {"terminal": "santos_brasil", "registros": total_atual, "com_gate": com_gate}
