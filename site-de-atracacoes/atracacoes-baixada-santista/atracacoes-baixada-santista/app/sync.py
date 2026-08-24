@@ -4,6 +4,7 @@ import logging
 from datetime import timedelta
 from typing import List, Optional
 
+from sqlalchemy import or_
 from sqlmodel import func, select
 
 from .database import get_session, init_db
@@ -21,6 +22,13 @@ logger = logging.getLogger("sync")
 # dias seguidos — assim ele continua visível/pesquisável no site por um
 # tempo depois da operação terminar, em vez de desaparecer na hora.
 SUMIDO_GRACE_DAYS = 30
+
+# Além da carência acima (que só conta a partir de quando o navio some da
+# leitura do terminal — e alguns terminais mantêm navios já operados
+# listados por semanas), removemos direto pela data real de ATB/ATD: se
+# já passou desse tanto de dias desde a atracação/saída confirmada, o
+# registro sai do banco independente de ainda aparecer na fonte ou não.
+ATB_ATD_GRACE_DAYS = 30
 
 # Adicione aqui novos scrapers assim que estiverem prontos:
 # from .scrapers.santos_brasil import SantosBrasilScraper
@@ -111,6 +119,25 @@ def sincronizar_terminal(session, terminal_id: str, records: List[dict]) -> Opti
     return None
 
 
+def remover_atb_atd_antigos(session) -> int:
+    """Remove atracações cujo evento confirmado mais recente (ATD, ou ATB
+    quando não há ATD) já passou de ATB_ATD_GRACE_DAYS dias — direto pela
+    data real, sem depender do navio ter sumido da leitura do terminal
+    primeiro (alguns terminais mantêm navios já operados na listagem por
+    semanas, o que atrasava demais a carência antiga)."""
+    limite = agora_brasilia() - timedelta(days=ATB_ATD_GRACE_DAYS)
+    stmt = select(Atracacao).where(
+        or_(
+            Atracacao.atd < limite,
+            (Atracacao.atd.is_(None)) & (Atracacao.atb < limite),  # type: ignore[union-attr]
+        )
+    )
+    antigos = session.exec(stmt).all()
+    for existing in antigos:
+        session.delete(existing)
+    return len(antigos)
+
+
 def contar_ativos(session, terminal_id: str) -> int:
     """Quantos navios desse terminal estão de fato no banco agora — usado
     pro status mostrado no site, pra não confundir com o tamanho de uma
@@ -194,6 +221,16 @@ def run_sync() -> dict:
                 logger.exception("Falha ao sincronizar %s", scraper.terminal_id)
                 results[scraper.terminal_id] = f"erro: {exc}"
                 registrar_status(session, scraper.terminal_id, erro=str(exc))
+
+        # Roda pra todos os terminais de uma vez (inclusive Santos Brasil,
+        # que só é atualizada pelo upload manual, não pelos scrapers acima).
+        removidos = remover_atb_atd_antigos(session)
+        if removidos:
+            session.commit()
+            logger.info(
+                "Removidas %d atracação(ões) com ATB/ATD há mais de %d dias",
+                removidos, ATB_ATD_GRACE_DAYS,
+            )
     return results
 
 
