@@ -48,7 +48,7 @@
     gap: 10px;
     align-items: center;
   }
-  input[type="text"], select {
+  input[type="text"], input[type="date"], select {
     padding: 9px 12px;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -59,6 +59,15 @@
   input[type="text"] {
     flex: 1 1 240px;
     min-width: 180px;
+  }
+  .filtro-periodo {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .filtro-periodo span {
+    font-size: 13px;
+    color: var(--muted);
   }
   button {
     padding: 9px 16px;
@@ -165,6 +174,23 @@
     <option value="dp_world">DP World (Embraport)</option>
     <option value="btp">BTP</option>
   </select>
+  <div class="filtro-periodo">
+    <select id="campo-data">
+      <option value="">Filtrar por período...</option>
+      <option value="eta">ETA</option>
+      <option value="etb">ETB</option>
+      <option value="etd">ETD</option>
+      <option value="ata">ATA</option>
+      <option value="atb">ATB</option>
+      <option value="atd">ATD</option>
+      <option value="deadline_carga">Deadline carga</option>
+      <option value="abertura_gate">Abertura gate</option>
+    </select>
+    <span>de</span>
+    <input type="date" id="data-de">
+    <span>até</span>
+    <input type="date" id="data-ate">
+  </div>
   <button id="btn-buscar">Buscar</button>
   <button id="btn-sync" class="secondary">Sincronizar agora</button>
   <button id="btn-exportar" class="secondary">Exportar Excel</button>
@@ -192,6 +218,9 @@ const API_BASE = "";
 const els = {
   q: document.getElementById("q"),
   terminal: document.getElementById("terminal"),
+  campoData: document.getElementById("campo-data"),
+  dataDe: document.getElementById("data-de"),
+  dataAte: document.getElementById("data-ate"),
   btnBuscar: document.getElementById("btn-buscar"),
   btnSync: document.getElementById("btn-sync"),
   btnExportar: document.getElementById("btn-exportar"),
@@ -261,13 +290,23 @@ function renderRows(rows) {
   els.tableWrap.innerHTML = `<table>${thead}${tbody}</table>`;
 }
 
+function paramsDoFiltro() {
+  const params = new URLSearchParams();
+  if (els.q.value.trim()) params.set("q", els.q.value.trim());
+  if (els.terminal.value) params.set("terminal", els.terminal.value);
+  if (els.campoData.value && (els.dataDe.value || els.dataAte.value)) {
+    params.set("campo_data", els.campoData.value);
+    if (els.dataDe.value) params.set("data_de", els.dataDe.value);
+    if (els.dataAte.value) params.set("data_ate", els.dataAte.value);
+  }
+  return params;
+}
+
 async function buscar() {
   els.statusLine.textContent = "Carregando...";
   els.tableWrap.innerHTML = "";
 
-  const params = new URLSearchParams();
-  if (els.q.value.trim()) params.set("q", els.q.value.trim());
-  if (els.terminal.value) params.set("terminal", els.terminal.value);
+  const params = paramsDoFiltro();
 
   try {
     const resp = await fetch(`${API_BASE}/buscar?${params.toString()}`);
@@ -358,9 +397,7 @@ async function enviarPlanilha() {
 }
 
 function exportarExcel() {
-  const params = new URLSearchParams();
-  if (els.q.value.trim()) params.set("q", els.q.value.trim());
-  if (els.terminal.value) params.set("terminal", els.terminal.value);
+  const params = paramsDoFiltro();
   window.location.href = `${API_BASE}/exportar?${params.toString()}`;
 }
 
@@ -369,6 +406,9 @@ els.btnSync.addEventListener("click", sincronizar);
 els.btnExportar.addEventListener("click", exportarExcel);
 els.q.addEventListener("keydown", (e) => { if (e.key === "Enter") buscar(); });
 els.terminal.addEventListener("change", buscar);
+els.campoData.addEventListener("change", buscar);
+els.dataDe.addEventListener("change", buscar);
+els.dataAte.addEventListener("change", buscar);
 els.btnUpload.addEventListener("click", enviarPlanilha);
 
 buscar();

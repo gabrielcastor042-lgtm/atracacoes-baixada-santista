@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 from contextlib import asynccontextmanager
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -48,6 +49,21 @@ _DATE_COLUMNS = {
     "deadline_carga", "previsao_abertura_gate", "abertura_gate", "atualizado_em",
 }
 
+# Campos de data que podem ser usados no filtro por período (chave = valor
+# aceito no parâmetro `campo_data`). Mapear por whitelist em vez de usar
+# getattr(Atracacao, campo_data) direto evita expor qualquer atributo do
+# modelo (inclusive não-datas) a um parâmetro vindo da URL.
+_CAMPO_DATA_MAP = {
+    "eta": Atracacao.eta,
+    "etb": Atracacao.etb,
+    "etd": Atracacao.etd,
+    "ata": Atracacao.ata,
+    "atb": Atracacao.atb,
+    "atd": Atracacao.atd,
+    "deadline_carga": Atracacao.deadline_carga,
+    "abertura_gate": Atracacao.abertura_gate,
+}
+
 
 def _valor_exportado(row: Atracacao, col: str) -> Any:
     if col == "abertura_gate":
@@ -77,7 +93,13 @@ app.add_middleware(
 )
 
 
-def _filtrar_atracacoes(q: Optional[str], terminal: Optional[str]):
+def _filtrar_atracacoes(
+    q: Optional[str],
+    terminal: Optional[str],
+    campo_data: Optional[str] = None,
+    data_de: Optional[date] = None,
+    data_ate: Optional[date] = None,
+):
     stmt = select(Atracacao)
     if terminal:
         stmt = stmt.where(Atracacao.terminal == terminal)
@@ -87,6 +109,14 @@ def _filtrar_atracacoes(q: Optional[str], terminal: Optional[str]):
             (Atracacao.navio.like(like))  # type: ignore[union-attr]
             | (Atracacao.viagem.like(like))  # type: ignore[union-attr]
         )
+    if campo_data and (data_de or data_ate):
+        coluna = _CAMPO_DATA_MAP.get(campo_data)
+        if coluna is not None:
+            if data_de:
+                stmt = stmt.where(coluna >= datetime.combine(data_de, time.min))
+            if data_ate:
+                # time.max inclui o dia final inteiro (até 23:59:59), não só a meia-noite dele.
+                stmt = stmt.where(coluna <= datetime.combine(data_ate, time.max))
     return stmt.order_by(Atracacao.eta.is_(None), Atracacao.eta)
 
 
@@ -94,9 +124,12 @@ def _filtrar_atracacoes(q: Optional[str], terminal: Optional[str]):
 def buscar(
     q: Optional[str] = Query(None, description="Nome do navio, viagem ou terminal"),
     terminal: Optional[str] = Query(None),
+    campo_data: Optional[str] = Query(None, description="Campo de data a filtrar: eta, etb, etd, ata, atb, atd, deadline_carga, abertura_gate"),
+    data_de: Optional[date] = Query(None, description="Data inicial (inclusive) do filtro por período"),
+    data_ate: Optional[date] = Query(None, description="Data final (inclusive) do filtro por período"),
 ):
     with get_session() as session:
-        stmt = _filtrar_atracacoes(q, terminal)
+        stmt = _filtrar_atracacoes(q, terminal, campo_data, data_de, data_ate)
         return session.exec(stmt).all()
 
 
@@ -104,11 +137,14 @@ def buscar(
 def exportar(
     q: Optional[str] = Query(None, description="Nome do navio, viagem ou terminal"),
     terminal: Optional[str] = Query(None),
+    campo_data: Optional[str] = Query(None),
+    data_de: Optional[date] = Query(None),
+    data_ate: Optional[date] = Query(None),
 ):
     """Exporta em Excel (.xlsx) as atracações que batem com o filtro atual
     (mesmos parâmetros da busca)."""
     with get_session() as session:
-        stmt = _filtrar_atracacoes(q, terminal)
+        stmt = _filtrar_atracacoes(q, terminal, campo_data, data_de, data_ate)
         rows = session.exec(stmt).all()
 
     wb = Workbook()
