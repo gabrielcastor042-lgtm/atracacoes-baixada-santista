@@ -199,10 +199,9 @@
 <div class="toolbar upload-row">
   <span class="upload-label">Santos Brasil — Lista de Atracação (.xls):</span>
   <input type="file" id="upload-excel" accept=".xls,.xlsx,.html,.htm">
-  <span class="upload-label">Lista de Recebimento (.html, opcional — gate já atualiza sozinho):</span>
-  <input type="file" id="upload-gate" accept=".html,.htm">
-  <button id="btn-upload" class="secondary">Enviar arquivo(s)</button>
+  <button id="btn-upload" class="secondary">Enviar arquivo</button>
   <span id="upload-status" class="upload-status"></span>
+  <span class="upload-label">(deadline e gate já atualizam sozinhos, via API — ver status acima)</span>
 </div>
 
 <main>
@@ -228,7 +227,6 @@ const els = {
   syncStatusLine: document.getElementById("sync-status-line"),
   tableWrap: document.getElementById("table-wrap"),
   uploadExcel: document.getElementById("upload-excel"),
-  uploadGate: document.getElementById("upload-gate"),
   btnUpload: document.getElementById("btn-upload"),
   uploadStatus: document.getElementById("upload-status"),
 };
@@ -236,6 +234,7 @@ const els = {
 const TERMINAL_LABELS = {
   ecoporto: "Ecoporto Santos",
   santos_brasil: "Santos Brasil Tecon",
+  santos_brasil_gate: "Santos Brasil — Deadline/Gate (API automática)",
   dp_world: "DP World",
   btp: "BTP",
 };
@@ -362,9 +361,8 @@ async function sincronizar() {
 
 async function enviarPlanilha() {
   const fileExcel = els.uploadExcel.files[0];
-  const fileGate = els.uploadGate.files[0];
   if (!fileExcel) {
-    els.uploadStatus.textContent = "Escolha ao menos a Lista de Atracação (.xls).";
+    els.uploadStatus.textContent = "Escolha a Lista de Atracação (.xls).";
     return;
   }
 
@@ -374,7 +372,6 @@ async function enviarPlanilha() {
 
   const formData = new FormData();
   formData.append("arquivo_excel", fileExcel);
-  if (fileGate) formData.append("arquivo_gate", fileGate);
 
   try {
     const resp = await fetch(`${API_BASE}/upload/santos_brasil`, {
@@ -385,14 +382,13 @@ async function enviarPlanilha() {
     if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
     els.uploadStatus.textContent = `${data.registros} navio(s) atualizado(s) (${data.com_gate} com gate).`;
     els.uploadExcel.value = "";
-    els.uploadGate.value = "";
     await buscar();
     await carregarStatusSync();
   } catch (err) {
     els.uploadStatus.textContent = `Erro: ${err.message}`;
   } finally {
     els.btnUpload.disabled = false;
-    els.btnUpload.textContent = "Enviar arquivo(s)";
+    els.btnUpload.textContent = "Enviar arquivo";
   }
 }
 

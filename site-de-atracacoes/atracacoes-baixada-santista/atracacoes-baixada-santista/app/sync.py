@@ -154,25 +154,28 @@ def remover_atracacoes_antigas(session) -> int:
     return len(antigos)
 
 
-def sincronizar_gate_santos_brasil(session) -> int:
+def sincronizar_gate_santos_brasil(session) -> dict:
     """Atualiza deadline/gate dos navios da Santos Brasil que JÁ estão
     cadastrados (via upload manual do arquivo principal), usando a API
     pública de Lista de Recebimento (`fetch_gate_data`). Não cria navio
     novo — falta ETA/ETB pra isso, e essa API só cobre navios de
     exportação — só complementa quem já existe, casando por
-    `fonte_raw_id`. Retorna quantos navios foram atualizados."""
+    `fonte_raw_id`. Retorna {"atualizados": quantos mudaram nessa
+    rodada, "cobertos": quantos navios têm gate vindo da API}."""
     gate_por_id = fetch_gate_data()
     if not gate_por_id:
-        return 0
+        return {"atualizados": 0, "cobertos": 0}
 
     stmt = select(Atracacao).where(Atracacao.terminal == "santos_brasil")
     existentes = session.exec(stmt).all()
 
     atualizados = 0
+    cobertos = 0
     for existing in existentes:
         gate = gate_por_id.get(existing.fonte_raw_id)
         if not gate:
             continue
+        cobertos += 1
         mudou = False
         for campo in ("deadline_carga", "previsao_abertura_gate", "abertura_gate"):
             valor = gate.get(campo)
@@ -183,23 +186,30 @@ def sincronizar_gate_santos_brasil(session) -> int:
             existing.atualizado_em = agora_brasilia()
             session.add(existing)
             atualizados += 1
-    return atualizados
+    return {"atualizados": atualizados, "cobertos": cobertos}
 
 
 def run_gate_sync() -> int:
     """Roda a cada GATE_SYNC_INTERVAL_MINUTES (ver scheduler.py) pra
     manter deadline/gate da Santos Brasil atualizados sem depender do
-    próximo upload manual do arquivo principal."""
+    próximo upload manual do arquivo principal. Registra um status
+    próprio ("santos_brasil_gate") pra ficar visível na tela quando essa
+    atualização automática rodou pela última vez."""
     init_db()
     with get_session() as session:
         try:
-            atualizados = sincronizar_gate_santos_brasil(session)
-            if atualizados:
+            resultado = sincronizar_gate_santos_brasil(session)
+            if resultado["atualizados"]:
                 session.commit()
-                logger.info("Gate Santos Brasil: %d navio(s) atualizado(s) via API", atualizados)
-            return atualizados
+                logger.info(
+                    "Gate Santos Brasil: %d navio(s) atualizado(s) via API (%d cobertos no total)",
+                    resultado["atualizados"], resultado["cobertos"],
+                )
+            registrar_status(session, "santos_brasil_gate", resultado["cobertos"])
+            return resultado["atualizados"]
         except Exception:  # noqa: BLE001
             logger.exception("Falha ao sincronizar gate da Santos Brasil via API")
+            registrar_status(session, "santos_brasil_gate", erro="Falha ao consultar a API de gate")
             return 0
 
 
