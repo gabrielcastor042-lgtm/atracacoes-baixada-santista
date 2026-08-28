@@ -20,7 +20,7 @@ from .models import Atracacao, SyncStatus
 from .scheduler import start_scheduler
 from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio
 from .scrapers.santos_brasil import merge_gate_data, parse_gate_upload, parse_upload
-from .sync import contar_ativos, registrar_status, run_sync, sincronizar_terminal
+from .sync import contar_ativos, registrar_status, run_gate_sync, run_sync, sincronizar_terminal
 
 logger = logging.getLogger("main")
 
@@ -178,30 +178,41 @@ def exportar(
 
 @app.post("/sync")
 def sync_now():
-    """Dispara uma sincronização manual (útil para testes/depuração)."""
-    return run_sync()
+    """Dispara uma sincronização manual (útil para testes/depuração) —
+    inclui também a atualização de gate/deadline da Santos Brasil."""
+    resultado = run_sync()
+    resultado["santos_brasil_gate_atualizados"] = run_gate_sync()
+    return resultado
 
 
 @app.post("/upload/santos_brasil")
 async def upload_santos_brasil(
     arquivo_excel: UploadFile = File(..., description="Lista de Atracação (.xls)"),
-    arquivo_gate: UploadFile = File(
-        ..., description="Lista de Recebimento salva como HTML (traz a liberação de gate)"
+    arquivo_gate: Optional[UploadFile] = File(
+        None,
+        description=(
+            "Lista de Recebimento salva como HTML (opcional — o gate já é "
+            "atualizado sozinho a cada 30 min via API; envie só se quiser "
+            "reforçar/sobrescrever na hora)."
+        ),
     ),
 ):
-    """Recebe os dois arquivos exportados manualmente da área de cliente
-    da Santos Brasil — a planilha (.xls) principal e o relatório de
-    liberação de gate (salvo como .html) — e sincroniza os navios no
-    banco, já complementados com o dado de gate."""
+    """Recebe a planilha (.xls) principal exportada manualmente da área de
+    cliente da Santos Brasil e sincroniza os navios no banco. O relatório
+    de liberação de gate (arquivo_gate) é opcional — o gate/deadline já é
+    mantido atualizado em segundo plano via `fetch_gate_data` (ver
+    scrapers/santos_brasil.py); só processamos esse arquivo se ele vier
+    junto."""
     try:
         conteudo_excel = await arquivo_excel.read()
         records = parse_upload(conteudo_excel)
         if not records:
             raise HTTPException(422, "Nenhum navio encontrado na planilha (.xls) enviada.")
 
-        conteudo_gate = await arquivo_gate.read()
-        gate_por_id = parse_gate_upload(conteudo_gate)
-        records = merge_gate_data(records, gate_por_id)
+        if arquivo_gate is not None:
+            conteudo_gate = await arquivo_gate.read()
+            gate_por_id = parse_gate_upload(conteudo_gate)
+            records = merge_gate_data(records, gate_por_id)
 
         try:
             rap_lookup = fetch_rap_por_navio()

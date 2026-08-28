@@ -13,6 +13,7 @@ from .scrapers.base import TerminalScraper
 from .scrapers.btp import BTPScraper
 from .scrapers.embraport import EmbraportScraper
 from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio
+from .scrapers.santos_brasil import fetch_gate_data
 from .timezone import agora_brasilia
 
 logger = logging.getLogger("sync")
@@ -151,6 +152,55 @@ def remover_atracacoes_antigas(session) -> int:
     for existing in antigos:
         session.delete(existing)
     return len(antigos)
+
+
+def sincronizar_gate_santos_brasil(session) -> int:
+    """Atualiza deadline/gate dos navios da Santos Brasil que JÁ estão
+    cadastrados (via upload manual do arquivo principal), usando a API
+    pública de Lista de Recebimento (`fetch_gate_data`). Não cria navio
+    novo — falta ETA/ETB pra isso, e essa API só cobre navios de
+    exportação — só complementa quem já existe, casando por
+    `fonte_raw_id`. Retorna quantos navios foram atualizados."""
+    gate_por_id = fetch_gate_data()
+    if not gate_por_id:
+        return 0
+
+    stmt = select(Atracacao).where(Atracacao.terminal == "santos_brasil")
+    existentes = session.exec(stmt).all()
+
+    atualizados = 0
+    for existing in existentes:
+        gate = gate_por_id.get(existing.fonte_raw_id)
+        if not gate:
+            continue
+        mudou = False
+        for campo in ("deadline_carga", "previsao_abertura_gate", "abertura_gate"):
+            valor = gate.get(campo)
+            if valor and getattr(existing, campo) != valor:
+                setattr(existing, campo, valor)
+                mudou = True
+        if mudou:
+            existing.atualizado_em = agora_brasilia()
+            session.add(existing)
+            atualizados += 1
+    return atualizados
+
+
+def run_gate_sync() -> int:
+    """Roda a cada GATE_SYNC_INTERVAL_MINUTES (ver scheduler.py) pra
+    manter deadline/gate da Santos Brasil atualizados sem depender do
+    próximo upload manual do arquivo principal."""
+    init_db()
+    with get_session() as session:
+        try:
+            atualizados = sincronizar_gate_santos_brasil(session)
+            if atualizados:
+                session.commit()
+                logger.info("Gate Santos Brasil: %d navio(s) atualizado(s) via API", atualizados)
+            return atualizados
+        except Exception:  # noqa: BLE001
+            logger.exception("Falha ao sincronizar gate da Santos Brasil via API")
+            return 0
 
 
 def contar_ativos(session, terminal_id: str) -> int:

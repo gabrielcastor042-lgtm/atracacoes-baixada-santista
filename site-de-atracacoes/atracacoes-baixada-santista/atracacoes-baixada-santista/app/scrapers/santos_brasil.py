@@ -1,7 +1,28 @@
 """
 Santos Brasil Tecon.
 
-SINCRONIZAÇÃO AUTOMÁTICA — PENDENTE:
+GATE/DEADLINE AUTOMATIZADO (achado em 2026-08-28) — FUNCIONANDO:
+
+A própria Santos Brasil expõe, sem login e sem bloqueio anti-bot, a API
+JSON que o mooring-list dela usa internamente pro relatório "Lista de
+Recebimento" (o antigo segundo arquivo, que era salvo como HTML e subido
+manual):
+    https://www.santosbrasil.com.br/v2021/mooring-list/pesquisa?unidade=tecon-santos&lista=recebimento-de-exportacao&atracadouro=&pesquisa=&dataInicial=&dataFinal=&statusNavio=
+`fetch_gate_data()` consulta essa API direto via `requests` (sem
+navegador) e devolve deadline/gate por `fonte_raw_id`, no mesmo formato
+que `parse_gate_upload()` já produzia a partir do HTML. O `sync.py` roda
+isso a cada 30 minutos (ver `sincronizar_gate_santos_brasil` /
+`run_gate_sync`), só ATUALIZANDO navios que já existem no banco (vindos
+do upload manual do arquivo principal) — não cria navio novo, porque
+falta ETA/ETB pra isso, e essa API só cobre navios de exportação (que
+passam por recebimento de carga antes de embarcar).
+
+IMPORTANTE — a "Lista de Atracação" principal (ETA/ETB/ATB/ATD)
+continua manual: essa não tem equivalente público, fica atrás de login
+na área de cliente. `arquivo_gate` no upload manual virou OPCIONAL (só
+serve de reforço/override se a API cair ou não cobrir algum navio).
+
+SINCRONIZAÇÃO AUTOMÁTICA DA LISTA PRINCIPAL — PENDENTE:
 
 CAMINHO PRINCIPAL (em andamento): a Santos Brasil disponibiliza uma API
 oficial e gratuita para clientes ("Santos Brasil Dev" / Integra Aqui:
@@ -21,56 +42,59 @@ O QUE FALTA:
 ALTERNATIVA explorada e descartada por ora: a página pública da Santos
 Brasil (santosbrasil.com.br/v2021/lista-de-atracacao) está atrás de
 proteção anti-bot Akamai (mesmo bloqueio do Ecoporto — "Access Denied"),
-não dá pra automatizar.
+não dá pra automatizar. A API de mooring-list acima também tem um valor
+`lista=lista-de-atracacao`, mas retorna sempre vazio sem estar logado —
+só a de recebimento (gate) é pública.
 
-OUTRA ALTERNATIVA testada parcialmente: o sistema oficial do governo
-federal "Janela Única Portuária" tem uma consulta de atracações por
-região (Regiao=ST p/ Santos), sem bloqueio anti-bot:
-    https://www.janelaunicaportuaria.org.br/dte/relatorios/frmParAtracNavDados.aspx?codMenu=17&Regiao=ST
-É um formulário ASP.NET clássico (não SPA) — os resultados aparecem
-dentro de um <iframe name="resultado"> depois de preencher "Período"
-(datas) e clicar no botão de imagem "Consultar" (#imgConsultar).
-Testado em 2026-07-16 preenchendo período de hoje a +60 dias: o
-formulário respondeu corretamente, mas retornou "Nenhum registro
-encontrado!" — algum parâmetro de busca (tipo de pesquisa, formato de
-data, ou o próprio filtro de região) provavelmente precisa de ajuste.
-Vale retomar essa investigação se a API oficial demorar muito.
+OUTRA ALTERNATIVA testada em 2026-08-28: o sistema "Janela Única
+Portuária" (frmParAtracNavDados.aspx, Regiao=ST) tem uma consulta de
+atracações por região, sem bloqueio anti-bot e sem login. Confirmado
+funcionando (formulário ASP.NET clássico: GET pra pegar __VIEWSTATE,
+POST com o período pra pesquisar — máximo 30 dias por consulta — e GET
+em frmResultado.aspx na mesma sessão pra pegar o resultado). Comparado
+com a Santos Brasil real: pra navios que JÁ atracaram/saíram (ATB/ATD
+confirmados) os dados batem muito bem (diferença de minutos). PORÉM pra
+navios PREVISTOS/futuros, os dados não são confiáveis — vários navios
+diferentes apareceram com a mesma previsão de atracação idêntica
+(valor genérico de cadastro, não uma previsão real atualizada), com
+diferenças de até semanas comparado à Santos Brasil. Por isso essa
+fonte NÃO é usada pra prever navios futuros, só serviria (se um dia for
+implementada) pra confirmar ATB/ATD de navios já operados.
 
 UPLOAD MANUAL (SEMI-AUTOMÁTICO) — FUNCIONANDO:
 
-Enquanto a automação não sai, o cliente exporta a "Lista de Atracação"
-pela área de cliente da Santos Brasil (botão de exportar, que baixa um
-arquivo .xls) e sobe esse arquivo pelo site (endpoint POST /upload/
-santos_brasil). Apesar da extensão .xls, o arquivo é na verdade uma
-tabela HTML (não um binário Excel de verdade) — `parse_upload()` faz
-esse parsing. Estrutura capturada em 2026-07-16, tabela com
-id="tabelaatracacao", cabeçalho <th> com atributo `data-col` (ASCII,
-estável) e colunas:
+Enquanto a automação da lista principal não sai, o cliente exporta a
+"Lista de Atracação" pela área de cliente da Santos Brasil (botão de
+exportar, que baixa um arquivo .xls) e sobe esse arquivo pelo site
+(endpoint POST /upload/santos_brasil, campo `arquivo_excel`). Apesar da
+extensão .xls, o arquivo é na verdade uma tabela HTML (não um binário
+Excel de verdade) — `parse_upload()` faz esse parsing. Estrutura
+capturada em 2026-07-16, tabela com id="tabelaatracacao", cabeçalho
+com atributo `data-col` (ASCII, estável, pode ou não vir dentro de
+<thead>/<tr> dependendo do export) e colunas:
 
 DEADLINE, BERTH_DIA_SEMANA, BERTH_HORARIO_INICIAL, BERTH_HORARIO_FINAL,
 P_ATRACA, ID, NAVIO, VIAGEM, AGENCIA, PREVISAO_CHEGADA, CHEGADA,
 PREVISAO_ATRACACAO, ATRACACAO, PREVISAO_SAIDA, SAIDA, BRC, SRV,
-DIA_JANELA (datas no formato dd/mm/aaaa HH:MM).
+DIA_JANELA (datas no formato dd/mm/aaaa HH:MM). Colunas novas
+desconhecidas (ex: PREV_MOV_EMB/DESC/REM, vistas num export de
+2026-08-24) são ignoradas automaticamente — o parsing é por posição
+entre cabeçalho e célula, não por um total fixo de colunas.
 
-Esse arquivo NÃO tem as datas de liberação de gate (Dry/Reefer) — essas
-só existem num segundo relatório da Santos Brasil ("Lista de
-Recebimento"), que só está disponível em PDF. O texto desse PDF não é
-extraível de forma confiável (fontes sem ToUnicode CMap, texto vira
-"(cid:XX)" embaralhado) — por isso pedimos pro cliente abrir esse
-relatório na tela normal (sem gerar PDF) e salvar como página HTML
-("Salvar como > Somente HTML"), e subir os DOIS arquivos juntos.
-`parse_gate_upload()` faz o parsing desse segundo arquivo (que vem
-salvo em Windows-1252, apesar do <meta charset="utf-8"> dele mentir) —
-tabela simples, sem `data-col`, colunas por posição:
+O campo `arquivo_gate` no mesmo endpoint agora é OPCIONAL — o gate já é
+atualizado sozinho a cada 30 min via `fetch_gate_data()` (ver acima).
+Se enviado mesmo assim, `parse_gate_upload()` faz o parsing do HTML
+(vem salvo em Windows-1252, apesar do <meta charset="utf-8"> dele
+mentir) — tabela simples, sem `data-col`, colunas por posição:
 
 Número (ID), Berço (BRC), Navio, Viagem Armador, Viagem, Berth Windows,
 Dia, Início, Fim, Deadline, Previsão de Chegada, Previsão Liberacao do
 Dry, Previsão Liberação do Reefer, Liberacao do Dry, Liberação do Reefer
 (datas no formato dd/mm/AA HH:MM — ano com 2 dígitos, diferente do
-primeiro arquivo).
+primeiro arquivo — mesmo formato que `fetch_gate_data()` recebe da API).
 
 `merge_gate_data()` junta os dois usando o "Número (ID)" como chave —
-é o mesmo código (`fonte_raw_id`) nos dois relatórios.
+é o mesmo código (`fonte_raw_id`) nos relatórios.
 """
 from __future__ import annotations
 
@@ -78,6 +102,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import requests
 from bs4 import BeautifulSoup
 
 from .base import TerminalScraper
@@ -213,6 +238,46 @@ def parse_gate_upload(content: bytes) -> Dict[str, Dict[str, Any]]:
         gate_por_id[fonte_raw_id] = {
             "previsao_abertura_gate": _parse_gate_date(textos[11]),
             "abertura_gate": _parse_gate_date(textos[13]),
+        }
+    return gate_por_id
+
+
+_GATE_API_URL = (
+    "https://www.santosbrasil.com.br/v2021/mooring-list/pesquisa"
+    "?unidade=tecon-santos&lista=recebimento-de-exportacao"
+    "&atracadouro=&pesquisa=&dataInicial=&dataFinal=&statusNavio="
+)
+
+
+def fetch_gate_data() -> Dict[str, Dict[str, Any]]:
+    """Consulta a API pública (sem login, achada em 2026-08-28) que a
+    própria Santos Brasil usa internamente pro relatório "Lista de
+    Recebimento" — mesmo dado do upload manual do arquivo_gate, só que
+    direto via HTTP, sem precisar salvar/subir o HTML. Datas vêm no mesmo
+    formato dd/mm/aa HH:MM do upload manual (reusa _parse_gate_date).
+
+    Só cobre navios de exportação (que passam por recebimento de carga
+    antes de embarcar) — NÃO é a Lista de Atracação principal (ETA/ETB/
+    ATB/ATD), essa continua atrás de login e precisa do upload manual do
+    arquivo .xls.
+
+    Devolve {fonte_raw_id: {"deadline_carga": ..., "previsao_abertura_gate": ..., "abertura_gate": ...}}.
+    """
+    resp = requests.get(_GATE_API_URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    resp.raise_for_status()
+    data = resp.json()
+    if not data.get("Success"):
+        return {}
+
+    gate_por_id: Dict[str, Dict[str, Any]] = {}
+    for item in data.get("VRecebimentoExportacao") or []:
+        fonte_raw_id = (item.get("ID") or "").strip()
+        if not fonte_raw_id:
+            continue
+        gate_por_id[fonte_raw_id] = {
+            "deadline_carga": _parse_gate_date(item.get("DEADLINE")),
+            "previsao_abertura_gate": _parse_gate_date(item.get("PREVISAO_LIBERACAO_DRY")),
+            "abertura_gate": _parse_gate_date(item.get("LIBERACAO_DRY")),
         }
     return gate_por_id
 

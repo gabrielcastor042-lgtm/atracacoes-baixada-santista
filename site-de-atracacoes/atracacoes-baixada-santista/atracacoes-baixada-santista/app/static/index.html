@@ -199,9 +199,9 @@
 <div class="toolbar upload-row">
   <span class="upload-label">Santos Brasil — Lista de Atracação (.xls):</span>
   <input type="file" id="upload-excel" accept=".xls,.xlsx,.html,.htm">
-  <span class="upload-label">Lista de Recebimento (.html, com gate):</span>
+  <span class="upload-label">Lista de Recebimento (.html, opcional — gate já atualiza sozinho):</span>
   <input type="file" id="upload-gate" accept=".html,.htm">
-  <button id="btn-upload" class="secondary">Enviar os 2 arquivos</button>
+  <button id="btn-upload" class="secondary">Enviar arquivo(s)</button>
   <span id="upload-status" class="upload-status"></span>
 </div>
 
@@ -363,8 +363,8 @@ async function sincronizar() {
 async function enviarPlanilha() {
   const fileExcel = els.uploadExcel.files[0];
   const fileGate = els.uploadGate.files[0];
-  if (!fileExcel || !fileGate) {
-    els.uploadStatus.textContent = "Escolha os 2 arquivos (Lista de Atracação e Lista de Recebimento).";
+  if (!fileExcel) {
+    els.uploadStatus.textContent = "Escolha ao menos a Lista de Atracação (.xls).";
     return;
   }
 
@@ -374,7 +374,7 @@ async function enviarPlanilha() {
 
   const formData = new FormData();
   formData.append("arquivo_excel", fileExcel);
-  formData.append("arquivo_gate", fileGate);
+  if (fileGate) formData.append("arquivo_gate", fileGate);
 
   try {
     const resp = await fetch(`${API_BASE}/upload/santos_brasil`, {
@@ -392,7 +392,7 @@ async function enviarPlanilha() {
     els.uploadStatus.textContent = `Erro: ${err.message}`;
   } finally {
     els.btnUpload.disabled = false;
-    els.btnUpload.textContent = "Enviar os 2 arquivos";
+    els.btnUpload.textContent = "Enviar arquivo(s)";
   }
 }
 
