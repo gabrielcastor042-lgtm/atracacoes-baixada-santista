@@ -274,12 +274,38 @@ class EmbraportScraper(TerminalScraper):
                 stable_count = last_count
 
             if stable_count > 0:
-                # Algumas colunas (ex.: Previsão de Atracação) parecem ser
-                # calculadas de forma assíncrona depois que as linhas já
-                # apareceram e a contagem já estabilizou — sem essa espera
-                # extra, a célula às vezes é capturada ainda vazia mesmo
-                # quando o site já mostra o valor visualmente.
-                page.wait_for_timeout(6000)
+                # A coluna "Previsão de Atracação" (ETB) é calculada de
+                # forma assíncrona depois que as linhas já apareceram —
+                # mas ENQUANTO isso não termina, o Knockout mostra um
+                # valor temporário IGUAL ao da "Previsão Chegada" (não
+                # fica vazia, por isso checar só "célula vazia" não
+                # detectava o carregamento incompleto). Só consideramos
+                # carregado quando uma boa parte das linhas mostra um
+                # valor de atracação preenchido e DIFERENTE do de
+                # chegada — sinal de que o cálculo real já rodou.
+                for _ in range(6):
+                    page.wait_for_timeout(3000)
+                    preenchido = navio_table.evaluate("""
+                        (el) => {
+                            const headers = Array.from(el.querySelectorAll('th'))
+                                .map(th => th.textContent.trim().toLowerCase());
+                            const idxChegada = headers.indexOf('previsão chegada');
+                            const idxAtracacao = headers.indexOf('previsão de atracação');
+                            if (idxChegada === -1 || idxAtracacao === -1) return true;
+                            const linhas = Array.from(el.querySelectorAll('tbody tr'))
+                                .filter(tr => tr.querySelectorAll('td').length === headers.length);
+                            if (linhas.length === 0) return true;
+                            const validas = linhas.filter(tr => {
+                                const cells = tr.querySelectorAll('td');
+                                const chegada = cells[idxChegada].textContent.trim();
+                                const atracacao = cells[idxAtracacao].textContent.trim();
+                                return atracacao && atracacao !== chegada;
+                            }).length;
+                            return (validas / linhas.length) > 0.3;
+                        }
+                    """)
+                    if preenchido:
+                        break
 
                 # Pega o outerHTML da tabela diretamente, no momento em
                 # que sabemos que está estável — page.content() (a página
