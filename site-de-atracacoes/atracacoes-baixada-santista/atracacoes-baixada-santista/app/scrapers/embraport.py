@@ -1,92 +1,111 @@
 """
 DP World / Embraport.
 
-HISTÓRICO — como esse scraper já foi implementado (até 2026-08-31): via
-Playwright, abrindo https://www.embraportonline.com.br/Navios/Escala,
-expandindo "Filtros", clicando "Todos"/"Pesquisar" e lendo a tabela HTML
-renderizada. Funcionava, mas tinha um problema crônico: a coluna
-"Previsão de Atracação" é calculada de forma assíncrona pelo próprio
-site (Knockout.js) — enquanto o cálculo não termina, a célula mostra um
-valor temporário idêntico ao de "Previsão Chegada", e não dava pra
-confiar num tempo fixo de espera pra saber quando o valor real (e
-diferente) já tinha chegado. 3 tentativas de ajustar esse tempo de
-espera não resolveram de forma confiável.
+Página: https://www.embraportonline.com.br/Navios/Escala
 
-ATUAL (desde 2026-08-31) — API DIRETA, achada inspecionando a aba
-Network do navegador: a própria tela usa uma chamada AJAX/JSON pra
-buscar os dados, sem precisar renderizar nada — muito mais rápida e sem
-o problema de timing acima, porque o valor já vem pronto do servidor
-(não depende de um cálculo assíncrono no navegador).
+Fluxo pra pegar o máximo de registros (confirmado pelo cliente):
+  1. Expandir o painel "Filtros" (começa recolhido).
+  2. Na seção "Escala de Navios", selecionar a aba "Todos".
+  3. Clicar em "Pesquisar".
+  4. A lista carrega por scroll infinito — rolar até o fim repetidamente
+     até o número de navios parar de crescer.
 
-    POST https://www.embraportonline.com.br/Navios/buscarEscalaPesquisa
-    Form Data: prNroOperacao, prDataInicial, prDataFinal, prArmador,
-               prServico, skipresult, takeresult
+A tabela só é preenchida via JS (Knockout.js) depois desse fluxo, daí o
+uso de Playwright.
 
-Devolve um array JSON (sem paginação confiável documentada — por
-segurança, pedimos em lotes e paramos quando um lote vier menor que o
-pedido). Cada item tem um schema bem mais rico que o da tabela HTML, mas
-com nomes de campo enganosos — confirmado comparando com um navio já
-com atracação/desatracação reais (ZIM USA, viagem 17W, Visit=ZUSA17W,
-ATB real = 21/08/2026 08:56):
+Colunas da aba "Todos" (datas previstas): Navio, Viagem, Visita, Armador,
+Serviço, Berço, Chegada, Previsão de Abertura Gate, Abertura de Gate,
+Deadline (Armador), Previsão Chegada, Previsão de Atracação, Previsão de
+Saída, Detalhes (datas no formato dd/mm/aaaa HH:MM, sem segundos).
 
-    campo bruto da API      | campo real (schema unificado) | evidência
-    -------------------------|-------------------------------|----------
-    PrevisaoChegadaDATA      | eta  (previsão de chegada)     | nome bate
-    ETADATA                  | etb  (previsão de ATRACAÇÃO!)  | "ETA" é
-                              |                                | apelido
-                              |                                | errado —
-                              |                                | é o que a
-                              |                                | tela
-                              |                                | mostra em
-                              |                                | "Previsão
-                              |                                | de
-                              |                                | Atracação"
-    ETDDATA                  | etd  (previsão de saída)       | nome bate
-    ChegadaDATA               | ata  (chegada CONFIRMADA)      | 20/08 05:20,
-                              |                                | antes do ATB
-    ATADATA                  | atb  (atracação CONFIRMADA!)   | bate exato
-                              |                                | com o ATB
-                              |                                | real
-                              |                                | (21/08
-                              |                                | 08:56) —
-                              |                                | "ATA" é
-                              |                                | apelido
-                              |                                | errado
-    SaidaDATA                 | atd  (saída CONFIRMADA)        | 22/08 09:41,
-                              |                                | depois do ATB
+Bug do próprio site: várias colunas de data compartilham o mesmo atributo
+HTML `nomecoluna` (ex.: "Chegada", "Previsão Chegada" e "Previsão de
+Atracação" são todas `AtracacaoDATA`). Por isso o parser identifica cada
+coluna pelo texto visível do cabeçalho (único), não pelo atributo — ao
+contrário do que a primeira versão deste scraper fazia (o que fazia o ETA
+nunca ser capturado, já que o atributo que o código antigo procurava
+nunca existiu de verdade).
 
-Os campos "*DATA" já vêm formatados como texto (dd/mm/aaaa HH:MM) —
-usamos eles direto, sem precisar decodificar o "/Date(...)/ " (ticks
-Unix em ms, formato clássico de serialização JSON do ASP.NET) dos
-campos irmãos sem sufixo.
+Dados CONFIRMADOS (atracação/operação/saída reais) não aparecem na aba
+"Todos" — só na aba "Desatracados", e só depois de preencher o filtro
+"Período Inicial" (também sofre do mesmo bug de nomecoluna duplicado:
+"Atracado", "Início da Operação" e "Fim da Operação" dividem o atributo
+`AberturaGateDATA`). O campo de data é `#edDataInicial`; preencher via
+`.fill()` não funciona (o app usa uma máscara que só reage a eventos de
+teclado de verdade) — precisa simular digitação com `page.keyboard.type`.
+Mesmo com o filtro certo, a aba retorna algumas linhas de navios ainda
+não atracados (ruído) — por isso só confiamos numa linha quando a coluna
+"Atracado" vem preenchida.
 
-O campo STATUS/ESTADO ("Previsto"/"Em Operação"/"Desatracado") já vem
-junto nessa mesma consulta — não precisa mais de uma segunda chamada
-separada pra pegar navios confirmados (a antiga aba "Desatracados").
+A página tem outras tabelas que não são a de navios — uma de lookup
+(0 colunas, pares ['Viagem', 'Sigla Navio']) e, se a Data Inicial for
+preenchida com um valor que o app não reconhece, uma de registros
+"STOPPAGE" (paralisação, não é navio). Identificamos a tabela certa pelo
+conteúdo (procurando a coluna "Navio" via atributo `nomecoluna`), em vez
+de assumir "a primeira tabela da página".
+
+A tabela real também tem 2 <tbody>: o primeiro vem sempre vazio
+(placeholder do template Knockout) e o segundo (com o binding
+"foreach") é onde as linhas de verdade ficam.
+
+TENTATIVA DE API DIRETA (2026-08-31) — REVERTIDA: achamos a API JSON
+que a própria tela usa (POST /Navios/buscarEscalaPesquisa), com um
+mapeamento de campos confirmado com dado real (inclusive corrigindo o
+bug de ETA/ETB abaixo). Funcionou nos primeiros testes manuais, mas
+passou a voltar sempre vazia (sem erro, sem exceção) nas rodadas
+automáticas seguintes — não deu pra confirmar se é bloqueio anti-bot
+por repetição ou algum token exigido que não estávamos enviando, e sem
+acesso pra debugar o site ao vivo (bloqueio 403 no ambiente de teste)
+não dava pra investigar com segurança. Revertido pra essa versão
+(navegador) pra não deixar a sincronização da DP World parada.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-import requests
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
-from .base import TerminalScraper
+from .base import TerminalScraper, run_in_thread
 
-URL_PAGINA = "https://www.embraportonline.com.br/Navios/Escala"
-URL_API = "https://www.embraportonline.com.br/Navios/buscarEscalaPesquisa"
+URL = "https://www.embraportonline.com.br/Navios/Escala"
+
+# Chave = texto visível do cabeçalho (minúsculo). Coluna ausente daqui =
+# ignorada (não faz parte do schema unificado, é redundante, ou é
+# ambígua demais pra confiar — ver docstring do módulo).
+#
+# Leitura DIRETA dos rótulos (sem troca) — "previsão chegada" = ETA,
+# "previsão de atracação" = ETB. Uma versão anterior deste scraper
+# trocava esses dois de propósito, achando (por engano) que o site
+# invertia os rótulos; reconfirmado em 2026-08-31 comparando com um
+# navio já atracado de verdade: a leitura direta bate com o ATB real
+# (34 min de diferença) e mantém a ordem lógica ETA < ETB < ETD. A
+# versão trocada, além de errar o ATB por ~26h, colocava o ETA
+# (previsão de chegada) depois do próprio ATB confirmado — impossível.
+_TEXT_MAP = {
+    "navio": "navio",
+    "viagem": "viagem",
+    "visita": "fonte_raw_id",
+    "berço": "berco",
+    "previsão de abertura gate": "previsao_abertura_gate",
+    "abertura de gate": "abertura_gate",
+    "deadline (armador)": "deadline_carga",
+    "previsão chegada": "eta",
+    "previsão de atracação": "etb",
+    "previsão de saída": "etd",
+}
+
+_DATE_FIELDS = {
+    "deadline_carga", "abertura_gate", "previsao_abertura_gate", "eta", "etb", "etd",
+}
 
 _DATE_FMT = "%d/%m/%Y %H:%M"
 
-# Tamanho do lote em cada página da API — grande o suficiente pra pegar
-# tudo numa única chamada na prática (a lista costuma ter poucas
-# centenas de navios), mas com paginação real como segurança caso a API
-# limite o retorno por página no futuro.
-_TAKE_POR_PAGINA = 1000
-_MAX_PAGINAS = 20
+_TABLE_WITH_NAVIO_SELECTOR = 'table:has(th[nomecoluna="NAVIO" i])'
 
 
-def _parse_date(value: Optional[str]) -> Optional[datetime]:
+def _parse_date(value: str) -> Optional[datetime]:
     value = (value or "").strip()
     if not value:
         return None
@@ -96,87 +115,240 @@ def _parse_date(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _texto(item: Dict[str, Any], chave: str) -> Optional[str]:
-    valor = (item.get(chave) or "").strip()
-    return valor or None
+def _find_navio_table(soup: BeautifulSoup):
+    """Acha a tabela cujo cabeçalho tem uma coluna com nomecoluna="NAVIO"
+    (case-insensitive) — a página tem outras tabelas irrelevantes."""
+    for table in soup.find_all("table"):
+        for th in table.find_all("th"):
+            if (th.get("nomecoluna") or "").strip().upper() == "NAVIO":
+                return table
+    return None
+
+
+def _linhas_com_texto(html: str):
+    """Devolve (headers_texto_em_lista, [linhas como dict header->texto])
+    da tabela de navios, usando o texto visível do cabeçalho como chave
+    (não o atributo `nomecoluna`, que se repete em várias colunas)."""
+    soup = BeautifulSoup(html, "html.parser")
+    table = _find_navio_table(soup)
+    if table is None:
+        return [], []
+
+    header_row = table.find("thead") or table.find("tr")
+    headers = [th.get_text(strip=True).lower() for th in header_row.find_all("th")]
+
+    bodies = table.find_all("tbody")
+    body = next((b for b in bodies if b.find("tr")), None) or table
+
+    linhas = []
+    for tr in body.find_all("tr"):
+        cells = tr.find_all("td")
+        if not cells or len(cells) != len(headers):
+            continue
+        linhas.append(dict(zip(headers, [c.get_text(strip=True) for c in cells])))
+    return headers, linhas
+
+
+def _parse_confirmados(html: str) -> Dict[str, Dict[str, datetime]]:
+    """Extrai os dados confirmados (atracação/saída reais) da aba
+    "Desatracados". Devolve {fonte_raw_id: {"atb"/"atd": datetime}}.
+
+    Só confia numa linha quando a coluna "Atracado" vem preenchida — a
+    aba às vezes lista navios que ainda nem atracaram (ruído do próprio
+    site). A coluna "Chegada" dessa aba é IGNORADA de propósito: ela
+    sempre vem idêntica ao ETA (Previsão Chegada), ou seja, não é um dado
+    confirmado de verdade — é o mesmo valor previsto reaparecendo com
+    outro rótulo (mais um efeito do bug de `nomecoluna` duplicado)."""
+    _, linhas = _linhas_com_texto(html)
+
+    resultado: Dict[str, Dict[str, datetime]] = {}
+    for linha in linhas:
+        visita = linha.get("visita")
+        atracado = linha.get("atracado")
+        if not visita or not atracado:
+            continue
+
+        confirmados: Dict[str, datetime] = {"atb": _parse_date(atracado)}
+        saida = linha.get("saída")
+        if saida:
+            confirmados["atd"] = _parse_date(saida)
+        resultado[visita] = confirmados
+
+    return resultado
 
 
 class EmbraportScraper(TerminalScraper):
     terminal_id = "dp_world"
 
     def fetch(self) -> List[Dict[str, Any]]:
-        session = requests.Session()
-        session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "X-Requested-With": "XMLHttpRequest",
-            "Accept": "application/json, text/plain, */*",
-            # Sem esse header a primeira tentativa (2026-08-31) demorou
-            # mais de 60s e deu timeout — o servidor pode tratar
-            # requisições sem Referer de forma mais lenta/suspeita.
-            "Referer": URL_PAGINA,
-        })
-        # Visita a página normal primeiro — não sabemos se a API exige
-        # algum cookie de sessão estabelecido nessa visita, mas replicar
-        # o comportamento de um navegador de verdade não tem custo e
-        # evita esse risco.
+        # Testado preencher o filtro "Período Inicial" também na consulta
+        # de "Todos" (achando que isso explicava a "Previsão de Atracação"
+        # divergente do que o site mostra pro usuário) — não fez diferença
+        # nenhuma no valor retornado, então não é a causa. Mantido só na
+        # consulta de "Desatracados", que é onde ele realmente é exigido.
+        html_previstos = run_in_thread(lambda: self._render("Todos"), timeout=240)
+        records = self._parse(html_previstos)
+
         try:
-            session.get(URL_PAGINA, timeout=30)
+            data_inicial = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
+            html_confirmados = run_in_thread(
+                lambda: self._render("Desatracados", data_inicial), timeout=240
+            )
+            confirmados = _parse_confirmados(html_confirmados)
+            for record in records:
+                extra = confirmados.get(record.get("fonte_raw_id"))
+                if extra:
+                    record.update(extra)
         except Exception:
+            # A confirmação de atracação/operação é um complemento — se
+            # essa segunda consulta falhar, não derruba a sincronização
+            # inteira (os dados previstos, obrigatórios, já foram obtidos).
             pass
 
-        itens: List[Dict[str, Any]] = []
-        skip = 0
-        for _ in range(_MAX_PAGINAS):
-            resp = session.post(
-                URL_API,
-                data={
-                    "prNroOperacao": "",
-                    "prDataInicial": "",
-                    "prDataFinal": "",
-                    "prArmador": "",
-                    "prServico": "",
-                    "skipresult": skip,
-                    "takeresult": _TAKE_POR_PAGINA,
-                },
-                timeout=120,
-            )
-            resp.raise_for_status()
-            pagina = resp.json()
-            if not isinstance(pagina, list) or not pagina:
-                break
-            itens.extend(pagina)
-            if len(pagina) < _TAKE_POR_PAGINA:
-                break
-            skip += _TAKE_POR_PAGINA
+        return records
 
-        return self._parse(itens)
+    def _render(self, aba: str = "Todos", data_inicial: Optional[str] = None) -> str:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(URL, wait_until="networkidle", timeout=60000)
 
-    def _parse(self, itens: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            # O app (Knockout.js) demora mais que o "networkidle" pra
+            # terminar de desenhar os filtros.
+            page.wait_for_timeout(5000)
+
+            # O painel "Filtros" começa recolhido; os campos só ficam
+            # visíveis/clicáveis depois de expandir essa seção.
+            try:
+                page.get_by_text("Filtros", exact=True).first.click(timeout=10000)
+                page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            if data_inicial:
+                try:
+                    campo = page.locator("#edDataInicial")
+                    campo.click()
+                    campo.fill("")
+                    # O campo usa uma máscara que só reage a eventos de
+                    # teclado reais — .fill() sozinho não commitava o
+                    # valor no observable do Knockout.
+                    page.keyboard.type(data_inicial, delay=80)
+                    page.keyboard.press("Tab")
+                    page.wait_for_timeout(500)
+                except Exception:
+                    pass
+
+            try:
+                page.get_by_text(aba, exact=True).first.click(timeout=15000)
+                page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            try:
+                btn = page.get_by_text("Pesquisar", exact=True).first
+                btn.scroll_into_view_if_needed(timeout=10000)
+                page.wait_for_timeout(500)
+                btn.click(timeout=15000)
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+
+            # A pesquisa demora pra responder, e o número de linhas oscila
+            # entre 0 e um valor transitório enquanto isso (ex: um
+            # "Aguarde..." passageiro). Só aceitamos quando a contagem
+            # fica igual em duas checagens seguidas (2s de intervalo).
+            navio_table = page.locator(_TABLE_WITH_NAVIO_SELECTOR)
+            previous_count = -1
+            stable_count = 0
+            for _ in range(20):
+                count = navio_table.locator("tbody tr").count()
+                if count > 0 and count == previous_count:
+                    stable_count = count
+                    break
+                previous_count = count
+                page.wait_for_timeout(2000)
+
+            # A lista carrega por scroll infinito (só busca mais navios
+            # quando o usuário rola a tela) — rola até o fim repetidamente
+            # até a contagem parar de crescer.
+            if stable_count > 0:
+                rows_locator = navio_table.locator("tbody tr")
+                last_count = stable_count
+                for _ in range(15):
+                    rows_locator.last.scroll_into_view_if_needed(timeout=5000)
+                    page.wait_for_timeout(2000)
+                    new_count = rows_locator.count()
+                    if new_count <= last_count:
+                        break
+                    last_count = new_count
+                stable_count = last_count
+
+            if stable_count > 0:
+                # A coluna "Previsão de Atracação" (ETB) é calculada de
+                # forma assíncrona, navio por navio, à medida que cada
+                # linha é carregada pelo scroll infinito — navios
+                # carregados por último (mais pra baixo na lista) têm
+                # bem menos tempo real pro cálculo terminar antes da
+                # gente capturar. Não dá pra confiar num tempo fixo nem
+                # exigir que uma fração das linhas mostre um valor
+                # diferente da chegada (nem todo navio tem uma previsão
+                # de atracação distinta — só os mais próximos da data,
+                # visto em produção). Em vez disso, esperamos até o
+                # CONTEÚDO INTEIRO da coluna parar de mudar entre duas
+                # checagens seguidas (2.5s de intervalo) — mesmo
+                # princípio já usado pra contagem de linhas estabilizar.
+                anterior = None
+                for _ in range(10):
+                    page.wait_for_timeout(2500)
+                    atual = navio_table.evaluate("""
+                        (el) => {
+                            const headers = Array.from(el.querySelectorAll('th'))
+                                .map(th => th.textContent.trim().toLowerCase());
+                            const idx = headers.indexOf('previsão de atracação');
+                            if (idx === -1) return '';
+                            return Array.from(el.querySelectorAll('tbody tr'))
+                                .filter(tr => tr.querySelectorAll('td').length === headers.length)
+                                .map(tr => tr.querySelectorAll('td')[idx].textContent.trim())
+                                .join('|');
+                        }
+                    """)
+                    if atual == anterior:
+                        break
+                    anterior = atual
+
+                # Pega o outerHTML da tabela diretamente, no momento em
+                # que sabemos que está estável — page.content() (a página
+                # inteira) chega tarde demais, o app já limpou a tabela de
+                # novo até lá.
+                html = navio_table.evaluate("el => el.outerHTML")
+            else:
+                html = ""
+
+            browser.close()
+            return html
+
+    def _parse(self, html: str) -> List[Dict[str, Any]]:
+        headers, linhas = _linhas_com_texto(html)
+        if not headers:
+            return []
+
         rows_out: List[Dict[str, Any]] = []
-        for item in itens:
-            navio = _texto(item, "NAVIO")
-            if not navio:
-                continue
+        for linha in linhas:
+            # "ata" nunca é preenchido por esse scraper (ver docstring do
+            # módulo) — fica explícito em None pra limpar qualquer valor
+            # antigo que tenha ficado gravado no banco por uma versão
+            # anterior do parser, já que o upsert só sobrescreve as
+            # chaves presentes no dict.
+            record: Dict[str, Any] = {"terminal": self.terminal_id, "ata": None}
+            for header_texto, texto in linha.items():
+                field = _TEXT_MAP.get(header_texto)
+                if field is None:
+                    continue
+                record[field] = _parse_date(texto) if field in _DATE_FIELDS else (texto or None)
 
-            deadline_texto = item.get("DryDeadlineDATA") or item.get("ReeferDeadlineDATA")
-
-            record: Dict[str, Any] = {
-                "terminal": self.terminal_id,
-                "navio": navio,
-                "viagem": _texto(item, "VIAGEMIN"),
-                "fonte_raw_id": _texto(item, "Visit"),
-                "berco": _texto(item, "Berco"),
-                "eta": _parse_date(item.get("PrevisaoChegadaDATA")),
-                "etb": _parse_date(item.get("ETADATA")),
-                "etd": _parse_date(item.get("ETDDATA")),
-                "ata": _parse_date(item.get("ChegadaDATA")),
-                "atb": _parse_date(item.get("ATADATA")),
-                "atd": _parse_date(item.get("SaidaDATA")),
-                "previsao_abertura_gate": _parse_date(item.get("PrevisaoAberturaGateDATA")),
-                "abertura_gate": _parse_date(item.get("AberturaGateDATA")),
-                "deadline_carga": _parse_date(deadline_texto),
-            }
-            rows_out.append(record)
+            if record.get("navio"):
+                rows_out.append(record)
 
         return rows_out
 
