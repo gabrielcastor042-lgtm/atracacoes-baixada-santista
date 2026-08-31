@@ -64,13 +64,14 @@ URL = "https://www.embraportonline.com.br/Navios/Escala"
 # ignorada (não faz parte do schema unificado, é redundante, ou é
 # ambígua demais pra confiar — ver docstring do módulo).
 #
-# "previsão chegada" e "previsão de atracação" mapeiam TROCADOS de
-# propósito: confirmado comparando com o modal de "Detalhes" do próprio
-# site (que usa outro template, sem o bug de nomecoluna duplicado) que a
-# tabela principal exibe esses dois rótulos invertidos — o valor que ela
-# chama de "Previsão de Atracação" é, na verdade, a previsão de chegada
-# (e vice-versa). Sem essa troca, ETB aparecia antes do ETA, o que não
-# faz sentido (um navio não atraca antes de chegar).
+# Leitura DIRETA dos rótulos (sem troca) — "previsão chegada" = ETA,
+# "previsão de atracação" = ETB. Uma versão anterior deste scraper
+# trocava esses dois de propósito, achando (por engano) que o site
+# invertia os rótulos; reconfirmado em 2026-08-31 comparando com um
+# navio já atracado de verdade: a leitura direta bate com o ATB real
+# (34 min de diferença) e mantém a ordem lógica ETA < ETB < ETD. A
+# versão trocada, além de errar o ATB por ~26h, colocava o ETA
+# (previsão de chegada) depois do próprio ATB confirmado — impossível.
 _TEXT_MAP = {
     "navio": "navio",
     "viagem": "viagem",
@@ -79,8 +80,8 @@ _TEXT_MAP = {
     "previsão de abertura gate": "previsao_abertura_gate",
     "abertura de gate": "abertura_gate",
     "deadline (armador)": "deadline_carga",
-    "previsão chegada": "etb",
-    "previsão de atracação": "eta",
+    "previsão chegada": "eta",
+    "previsão de atracação": "etb",
     "previsão de saída": "etd",
 }
 
