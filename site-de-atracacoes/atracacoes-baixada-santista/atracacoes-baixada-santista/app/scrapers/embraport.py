@@ -109,6 +109,11 @@ class EmbraportScraper(TerminalScraper):
         session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/plain, */*",
+            # Sem esse header a primeira tentativa (2026-08-31) demorou
+            # mais de 60s e deu timeout — o servidor pode tratar
+            # requisições sem Referer de forma mais lenta/suspeita.
+            "Referer": URL_PAGINA,
         })
         # Visita a página normal primeiro — não sabemos se a API exige
         # algum cookie de sessão estabelecido nessa visita, mas replicar
@@ -133,7 +138,7 @@ class EmbraportScraper(TerminalScraper):
                     "skipresult": skip,
                     "takeresult": _TAKE_POR_PAGINA,
                 },
-                timeout=60,
+                timeout=120,
             )
             resp.raise_for_status()
             pagina = resp.json()
