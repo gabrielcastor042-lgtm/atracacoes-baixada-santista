@@ -175,13 +175,13 @@ class EmbraportScraper(TerminalScraper):
         # divergente do que o site mostra pro usuário) — não fez diferença
         # nenhuma no valor retornado, então não é a causa. Mantido só na
         # consulta de "Desatracados", que é onde ele realmente é exigido.
-        html_previstos = run_in_thread(lambda: self._render("Todos"), timeout=150)
+        html_previstos = run_in_thread(lambda: self._render("Todos"), timeout=240)
         records = self._parse(html_previstos)
 
         try:
             data_inicial = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
             html_confirmados = run_in_thread(
-                lambda: self._render("Desatracados", data_inicial), timeout=150
+                lambda: self._render("Desatracados", data_inicial), timeout=240
             )
             confirmados = _parse_confirmados(html_confirmados)
             for record in records:
@@ -275,37 +275,36 @@ class EmbraportScraper(TerminalScraper):
 
             if stable_count > 0:
                 # A coluna "Previsão de Atracação" (ETB) é calculada de
-                # forma assíncrona depois que as linhas já apareceram —
-                # mas ENQUANTO isso não termina, o Knockout mostra um
-                # valor temporário IGUAL ao da "Previsão Chegada" (não
-                # fica vazia, por isso checar só "célula vazia" não
-                # detectava o carregamento incompleto). Só consideramos
-                # carregado quando uma boa parte das linhas mostra um
-                # valor de atracação preenchido e DIFERENTE do de
-                # chegada — sinal de que o cálculo real já rodou.
-                for _ in range(6):
-                    page.wait_for_timeout(3000)
-                    preenchido = navio_table.evaluate("""
+                # forma assíncrona, navio por navio, à medida que cada
+                # linha é carregada pelo scroll infinito — navios
+                # carregados por último (mais pra baixo na lista) têm
+                # bem menos tempo real pro cálculo terminar antes da
+                # gente capturar. Não dá pra confiar num tempo fixo nem
+                # exigir que uma fração das linhas mostre um valor
+                # diferente da chegada (nem todo navio tem uma previsão
+                # de atracação distinta — só os mais próximos da data,
+                # visto em produção). Em vez disso, esperamos até o
+                # CONTEÚDO INTEIRO da coluna parar de mudar entre duas
+                # checagens seguidas (2.5s de intervalo) — mesmo
+                # princípio já usado pra contagem de linhas estabilizar.
+                anterior = None
+                for _ in range(10):
+                    page.wait_for_timeout(2500)
+                    atual = navio_table.evaluate("""
                         (el) => {
                             const headers = Array.from(el.querySelectorAll('th'))
                                 .map(th => th.textContent.trim().toLowerCase());
-                            const idxChegada = headers.indexOf('previsão chegada');
-                            const idxAtracacao = headers.indexOf('previsão de atracação');
-                            if (idxChegada === -1 || idxAtracacao === -1) return true;
-                            const linhas = Array.from(el.querySelectorAll('tbody tr'))
-                                .filter(tr => tr.querySelectorAll('td').length === headers.length);
-                            if (linhas.length === 0) return true;
-                            const validas = linhas.filter(tr => {
-                                const cells = tr.querySelectorAll('td');
-                                const chegada = cells[idxChegada].textContent.trim();
-                                const atracacao = cells[idxAtracacao].textContent.trim();
-                                return atracacao && atracacao !== chegada;
-                            }).length;
-                            return (validas / linhas.length) > 0.3;
+                            const idx = headers.indexOf('previsão de atracação');
+                            if (idx === -1) return '';
+                            return Array.from(el.querySelectorAll('tbody tr'))
+                                .filter(tr => tr.querySelectorAll('td').length === headers.length)
+                                .map(tr => tr.querySelectorAll('td')[idx].textContent.trim())
+                                .join('|');
                         }
                     """)
-                    if preenchido:
+                    if atual == anterior:
                         break
+                    anterior = atual
 
                 # Pega o outerHTML da tabela diretamente, no momento em
                 # que sabemos que está estável — page.content() (a página
