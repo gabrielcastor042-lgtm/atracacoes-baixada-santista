@@ -15,8 +15,9 @@ logger = logging.getLogger("scheduler")
 SYNC_INTERVAL_MINUTES = 10
 
 # Deadline/gate da Santos Brasil (via API pública, sem navegador) — mais
-# leve que o sync principal, dá pra rodar num intervalo próprio.
-GATE_SYNC_INTERVAL_MINUTES = 30
+# leve que o sync principal, mas mantido no mesmo intervalo por
+# consistência com BTP/DP World.
+GATE_SYNC_INTERVAL_MINUTES = 10
 
 
 def start_scheduler() -> BackgroundScheduler:
