@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import re
 import warnings
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -145,7 +145,32 @@ def fetch_rap_por_navio() -> Dict[str, Dict[str, List[Tuple[Optional[datetime], 
                 if palavra in local:
                     resultado[terminal_id].setdefault(navio_norm, []).append((eta, rap_formatado))
 
+    total_navios = sum(len(tabela) for tabela in resultado.values())
+    if total_navios == 0:
+        # Essa página normalmente lista centenas de navios (é a lista de
+        # TODO o porto) — zero é sinal de que a página veio vazia (ver
+        # 2026-09-08: confirmado com um navegador de verdade também, não
+        # é bloqueio anti-bot, parece instabilidade no site deles), não de
+        # que ninguém tem RAP agora. Levanta erro pra quem chama tratar
+        # como falha (e não sincronizar RAP nenhum nessa rodada) em vez de
+        # silenciosamente apagar o RAP de todo mundo — ver sync.py.
+        raise RuntimeError(
+            "Lista de atracações programadas da Autoridade Portuária voltou "
+            "vazia (0 navios) — provável instabilidade temporária no site "
+            "deles."
+        )
+
     return resultado
+
+
+# Tolerância máxima entre a ETA que o terminal informa pro registro e a
+# ETA da linha correspondente na Autoridade Portuária pra aceitar aquele
+# RAP como sendo da mesma viagem (não só do mesmo navio). Generoso o
+# bastante pra absorver pequena defasagem entre as duas fontes (uma
+# atualiza a previsão um pouco antes da outra), mas bem menor que o
+# intervalo típico entre duas viagens distintas do mesmo navio (em geral
+# várias semanas, ver exemplos no bug original).
+_TOLERANCIA_ETA = timedelta(days=3)
 
 
 def enriquecer_com_rap(
@@ -158,30 +183,36 @@ def enriquecer_com_rap(
     Brasil — a BTP já traz o RAP direto do próprio terminal.
 
     Um mesmo navio pode ter mais de uma viagem candidata (ver
-    `fetch_rap_por_navio`). Quando isso acontece, desempata pela ETA mais
-    próxima da ETA que o próprio terminal já informou pro registro — sem
-    isso, todas as viagens futuras do navio ficariam com o RAP da última
-    lida na página da Autoridade Portuária (bug confirmado em produção
-    em 2026-09-08). Se não der pra desempatar com segurança (falta ETA
-    de um dos lados, ou nenhuma candidata tem ETA), deixa o RAP em
-    branco em vez de arriscar mostrar o de outra viagem."""
+    `fetch_rap_por_navio`) — E MESMO QUANDO SÓ TEM UMA, ela pode não ser a
+    viagem certa: a Autoridade Portuária lista principalmente viagens
+    próximas, então um navio com várias viagens futuras nossas pode ter
+    só a mais próxima delas na lista deles. Por isso a ETA da candidata
+    sempre precisa estar a no máximo `_TOLERANCIA_ETA` da ETA que o
+    próprio terminal já informou pro registro — sem isso, ou a última
+    linha lida (bug original, 2026-09-08) ou a única viagem listada
+    (variante do mesmo bug, achada na mesma investigação) acaba grudada
+    em TODAS as viagens futuras do navio. Se não der pra confirmar a ETA
+    de nenhum lado, ou nenhuma candidata cair dentro da tolerância, deixa
+    o RAP em branco em vez de arriscar mostrar o de outra viagem."""
     tabela = rap_lookup.get(terminal_id, {})
     for record in records:
         candidatas = tabela.get(normalizar_navio(record.get("navio") or ""), [])
-        if not candidatas:
-            record["rap"] = None
-        elif len(candidatas) == 1:
+        eta_registro = record.get("eta")
+        com_eta = [(eta, rap) for eta, rap in candidatas if eta is not None]
+
+        if eta_registro is not None and com_eta:
+            eta_mais_proxima, rap_mais_proximo = min(
+                com_eta, key=lambda par: abs(par[0] - eta_registro)
+            )
+            diferenca = abs(eta_mais_proxima - eta_registro)
+            record["rap"] = rap_mais_proximo if diferenca <= _TOLERANCIA_ETA else None
+        elif len(candidatas) == 1 and eta_registro is None:
+            # Não dá pra comparar ETA (falta de um dos lados), mas só
+            # existe uma viagem candidata pra esse navio agora — não tem
+            # com quem confundir.
             record["rap"] = candidatas[0][1]
         else:
-            eta_registro = record.get("eta")
-            com_eta = [(eta, rap) for eta, rap in candidatas if eta is not None]
-            if eta_registro is None or not com_eta:
-                record["rap"] = None
-            else:
-                _, rap_mais_proximo = min(
-                    com_eta, key=lambda par: abs((par[0] - eta_registro).total_seconds())
-                )
-                record["rap"] = rap_mais_proximo
+            record["rap"] = None
 
 
 if __name__ == "__main__":
