@@ -270,4 +270,18 @@ def debug_rap(navio: str = Query(..., description="Nome do navio, ex: STEPHANIE 
     }
 
 
+@app.get("/debug/rap-summary")
+def debug_rap_summary():
+    """TEMPORÁRIO — mesma investigação acima, mas em vez de olhar um navio
+    específico, mostra quantos navios/linhas o parsing da Autoridade
+    Portuária está encontrando no total agora, com uma amostra. Serve pra
+    checar se o parsing da tabela em si ainda está funcionando."""
+    lookup = fetch_rap_por_navio()
+    resumo = {}
+    for terminal_id, tabela in lookup.items():
+        amostra = {navio: candidatas for navio, candidatas in list(tabela.items())[:10]}
+        resumo[terminal_id] = {"total_navios": len(tabela), "amostra": amostra}
+    return resumo
+
+
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
