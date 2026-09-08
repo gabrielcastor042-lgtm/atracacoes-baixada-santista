@@ -24,16 +24,28 @@ Viagem (= RAP), DUV, Mapa.
 Limitações conhecidas:
   - Só lista navios ainda PROGRAMADOS (não cobre atracações já
     concluídas há mais tempo).
-  - O casamento é só por nome do navio + terminal (sem um identificador
-    único tipo IMO nos outros scrapers) — em teoria dois navios homônimos
-    programados pro mesmo terminal na mesma janela poderiam colidir, mas
-    é um cenário raro o suficiente pra aceitar nessa primeira versão.
+  - O casamento é por nome do navio + terminal, sem um identificador
+    único tipo IMO nos outros scrapers — mas um mesmo navio aparece
+    aqui várias vezes quando tem mais de uma viagem programada (cada
+    linha é uma viagem, com seu próprio RAP). Por isso o casamento
+    também usa a coluna ETA pra desambiguar: entre as viagens do mesmo
+    navio nessa lista, ficamos com a de ETA mais próxima do ETA que o
+    próprio terminal (DP World/Santos Brasil) já informou pro registro.
+    Sem isso, BUG CONFIRMADO em produção (2026-09-08): todas as viagens
+    futuras de um mesmo navio recebiam o RAP da última linha lida da
+    página da Autoridade Portuária (ex.: STEPHANIE C com 3 viagens
+    diferentes na DP World, todas mostrando o mesmo RAP). Se o registro
+    do terminal não tiver ETA, ou nenhuma linha da Autoridade Portuária
+    tiver ETA parseável, e houver mais de uma viagem candidata pro
+    mesmo navio, preferimos deixar o RAP em branco a arriscar mostrar o
+    de uma viagem errada.
 """
 from __future__ import annotations
 
 import re
 import warnings
-from typing import Any, Dict, List
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 import urllib3
@@ -58,6 +70,23 @@ def normalizar_navio(nome: str) -> str:
     return re.sub(r"\s+", " ", sem_parenteses).strip().upper()
 
 
+# Formatos já vistos na coluna ETA dessa página (varia se vem com hora ou
+# só a data) — tenta cada um até um bater.
+_ETA_FORMATOS = ("%d/%m/%Y %H:%M", "%d/%m/%Y")
+
+
+def _parse_eta(bruto: str) -> Optional[datetime]:
+    bruto = (bruto or "").strip()
+    if not bruto:
+        return None
+    for formato in _ETA_FORMATOS:
+        try:
+            return datetime.strptime(bruto, formato)
+        except ValueError:
+            continue
+    return None
+
+
 def _formatar_rap(bruto: str) -> str:
     """A coluna "Viagem" vem como "3365/2026" — padroniza pro mesmo
     formato usado em toda a plataforma (5 dígitos + espaço duplo + ano,
@@ -69,10 +98,17 @@ def _formatar_rap(bruto: str) -> str:
     return f"{numero.strip().zfill(5)}  {ano.strip()}"
 
 
-def fetch_rap_por_navio() -> Dict[str, Dict[str, str]]:
-    """Devolve {terminal_id: {navio_normalizado: rap}} a partir da lista
-    de atracações programadas da Autoridade Portuária."""
-    resultado: Dict[str, Dict[str, str]] = {tid: {} for tid in set(_LOCAL_PARA_TERMINAL.values())}
+def fetch_rap_por_navio() -> Dict[str, Dict[str, List[Tuple[Optional[datetime], str]]]]:
+    """Devolve {terminal_id: {navio_normalizado: [(eta, rap), ...]}} a
+    partir da lista de atracações programadas da Autoridade Portuária.
+
+    A lista é por NAVIO, não por navio+viagem já feito — por isso o valor
+    é uma lista: um mesmo navio pode ter várias viagens programadas (cada
+    uma com seu próprio RAP), e é `enriquecer_com_rap` quem decide qual
+    delas casa com cada registro, usando a ETA."""
+    resultado: Dict[str, Dict[str, List[Tuple[Optional[datetime], str]]]] = {
+        tid: {} for tid in set(_LOCAL_PARA_TERMINAL.values())
+    }
 
     try:
         resp = requests.get(URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
@@ -98,6 +134,7 @@ def fetch_rap_por_navio() -> Dict[str, Dict[str, str]]:
                 continue
             local = cells[3].get_text(strip=True).lower()
             navio = cells[4].get_text(strip=True)
+            eta = _parse_eta(cells[2].get_text(strip=True))
             rap = cells[8].get_text(strip=True)
             if not navio or not rap:
                 continue
@@ -106,23 +143,48 @@ def fetch_rap_por_navio() -> Dict[str, Dict[str, str]]:
             rap_formatado = _formatar_rap(rap)
             for palavra, terminal_id in _LOCAL_PARA_TERMINAL.items():
                 if palavra in local:
-                    resultado[terminal_id][navio_norm] = rap_formatado
+                    resultado[terminal_id].setdefault(navio_norm, []).append((eta, rap_formatado))
 
     return resultado
 
 
 def enriquecer_com_rap(
-    records: List[Dict[str, Any]], terminal_id: str, rap_lookup: Dict[str, Dict[str, str]]
+    records: List[Dict[str, Any]],
+    terminal_id: str,
+    rap_lookup: Dict[str, Dict[str, List[Tuple[Optional[datetime], str]]]],
 ) -> None:
     """Preenche o campo "rap" de cada registro em memória (in-place),
     casando pelo nome do navio normalizado. Usado pra DP World e Santos
-    Brasil — a BTP já traz o RAP direto do próprio terminal."""
+    Brasil — a BTP já traz o RAP direto do próprio terminal.
+
+    Um mesmo navio pode ter mais de uma viagem candidata (ver
+    `fetch_rap_por_navio`). Quando isso acontece, desempata pela ETA mais
+    próxima da ETA que o próprio terminal já informou pro registro — sem
+    isso, todas as viagens futuras do navio ficariam com o RAP da última
+    lida na página da Autoridade Portuária (bug confirmado em produção
+    em 2026-09-08). Se não der pra desempatar com segurança (falta ETA
+    de um dos lados, ou nenhuma candidata tem ETA), deixa o RAP em
+    branco em vez de arriscar mostrar o de outra viagem."""
     tabela = rap_lookup.get(terminal_id, {})
     for record in records:
-        record["rap"] = tabela.get(normalizar_navio(record.get("navio") or ""))
+        candidatas = tabela.get(normalizar_navio(record.get("navio") or ""), [])
+        if not candidatas:
+            record["rap"] = None
+        elif len(candidatas) == 1:
+            record["rap"] = candidatas[0][1]
+        else:
+            eta_registro = record.get("eta")
+            com_eta = [(eta, rap) for eta, rap in candidatas if eta is not None]
+            if eta_registro is None or not com_eta:
+                record["rap"] = None
+            else:
+                _, rap_mais_proximo = min(
+                    com_eta, key=lambda par: abs((par[0] - eta_registro).total_seconds())
+                )
+                record["rap"] = rap_mais_proximo
 
 
 if __name__ == "__main__":
     import json
 
-    print(json.dumps(fetch_rap_por_navio(), indent=2, ensure_ascii=False))
+    print(json.dumps(fetch_rap_por_navio(), indent=2, ensure_ascii=False, default=str))
