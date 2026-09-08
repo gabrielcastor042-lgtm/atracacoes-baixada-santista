@@ -18,7 +18,7 @@ from sqlmodel import select
 from .database import get_session, init_db
 from .models import Atracacao, SyncStatus
 from .scheduler import start_scheduler
-from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio
+from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio, normalizar_navio
 from .scrapers.santos_brasil import merge_gate_data, parse_gate_upload, parse_upload
 from .sync import contar_ativos, registrar_status, run_gate_sync, run_sync, sincronizar_terminal
 
@@ -253,6 +253,21 @@ def status():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/debug/rap")
+def debug_rap(navio: str = Query(..., description="Nome do navio, ex: STEPHANIE C")):
+    """TEMPORÁRIO — investigação do bug de RAP duplicado entre viagens
+    (ver app/scrapers/porto_santos.py). Mostra exatamente o que a lista
+    da Autoridade Portuária tem pra esse navio (candidatas de RAP + ETA),
+    sem passar pelo desempate — só de diagnóstico, pode ser removido
+    depois que o bug for resolvido de vez."""
+    lookup = fetch_rap_por_navio()
+    navio_norm = normalizar_navio(navio)
+    return {
+        terminal_id: tabela.get(navio_norm, [])
+        for terminal_id, tabela in lookup.items()
+    }
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
