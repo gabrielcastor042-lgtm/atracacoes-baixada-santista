@@ -53,7 +53,15 @@ def _upsert(session, record: dict) -> None:
     Um valor None no registro novo NUNCA apaga um valor já conhecido no
     banco — alguns terminais somem com a previsão (ETA/ETB/ETD) do
     próprio site assim que a confirmação real (ATA/ATB/ATD) acontece, e
-    sem essa checagem a previsão seria perdida na sincronização seguinte."""
+    sem essa checagem a previsão seria perdida na sincronização seguinte.
+
+    EXCEÇÃO: "rap" é recalculado do zero a cada sincronização (ver
+    enriquecer_com_rap em scrapers/porto_santos.py) — None ali é uma
+    resposta deliberada ("não achamos mais correspondência confiável pra
+    essa viagem"), não a ausência do dado, então deixamos sobrescrever
+    mesmo quando vier None. Sem essa exceção, um RAP que deixou de ser
+    válido (ex.: já foi usado por engano numa viagem errada, ver bug de
+    2026-09-08) ficaria preso no banco pra sempre."""
     stmt = select(Atracacao).where(
         Atracacao.terminal == record.get("terminal"),
         Atracacao.navio == record.get("navio"),
@@ -63,7 +71,7 @@ def _upsert(session, record: dict) -> None:
 
     if existing:
         for key, value in record.items():
-            if value is None:
+            if value is None and key != "rap":
                 continue
             setattr(existing, key, value)
         existing.atualizado_em = agora_brasilia()
@@ -253,12 +261,18 @@ def run_sync() -> dict:
 
     # Consultado uma única vez por rodada e compartilhado entre os
     # terminais (evita repetir a mesma requisição). Se falhar, seguimos
-    # sem RAP nessa rodada — não é motivo pra derrubar a sincronização.
+    # sem mexer no RAP nessa rodada (rap_lookup = None) — não é motivo
+    # pra derrubar a sincronização, e é diferente de "consultamos e não
+    # achamos ninguém": nesse segundo caso enriquecer_com_rap roda normal
+    # e pode legitimamente limpar RAPs que ficaram desatualizados (ver
+    # _upsert). fetch_rap_por_navio já levanta erro sozinho se a página
+    # vier vazia (0 navios) — sinal de instabilidade no site deles, não
+    # de que ninguém tem RAP agora.
     try:
         rap_lookup = fetch_rap_por_navio()
     except Exception:
         logger.warning("Falha ao consultar RAP na Autoridade Portuária de Santos", exc_info=True)
-        rap_lookup = {}
+        rap_lookup = None
 
     with get_session() as session:
         for scraper in ACTIVE_SCRAPERS:
@@ -277,8 +291,11 @@ def run_sync() -> dict:
                     # A BTP já expõe o RAP na própria consulta.
                     for record in records:
                         record["rap"] = record.get("fonte_raw_id")
-                else:
+                elif rap_lookup is not None:
                     enriquecer_com_rap(records, scraper.terminal_id, rap_lookup)
+                # else: RAP indisponível nessa rodada (ver acima) — não
+                # inclui "rap" nos registros, então _upsert não mexe no
+                # valor já salvo pra esses navios.
 
                 aviso = sincronizar_terminal(session, scraper.terminal_id, records)
                 session.commit()
