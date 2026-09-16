@@ -18,7 +18,14 @@ from sqlmodel import select
 from .database import get_session, init_db
 from .models import Atracacao, SyncStatus
 from .scheduler import start_scheduler
-from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio, normalizar_navio
+from .scrapers.porto_santos import (
+    carregar_rap_conhecido,
+    enriquecer_com_rap,
+    fetch_rap_por_navio,
+    mesclar_rap_lookup,
+    normalizar_navio,
+    persistir_rap_conhecido,
+)
 from .scrapers.santos_brasil import merge_gate_data, parse_gate_upload, parse_upload
 from .sync import contar_ativos, registrar_status, run_gate_sync, run_sync, sincronizar_terminal
 
@@ -214,13 +221,24 @@ async def upload_santos_brasil(
             gate_por_id = parse_gate_upload(conteudo_gate)
             records = merge_gate_data(records, gate_por_id)
 
-        try:
-            rap_lookup = fetch_rap_por_navio()
-            enriquecer_com_rap(records, "santos_brasil", rap_lookup)
-        except Exception:
-            pass  # RAP é um complemento — não impede o upload de seguir
-
         with get_session() as session:
+            # Mesma lógica de cache do sync automático (ver run_sync em
+            # sync.py): o upload manual é outra chance de capturar RAPs
+            # novos pra esse histórico compartilhado, e também se
+            # beneficia de tudo que o sync automático de BTP/DP World já
+            # capturou antes — sem isso, o RAP da Santos Brasil só teria
+            # a chance rara de bater exatamente com a janela rolante da
+            # Autoridade Portuária no instante exato de cada upload.
+            rap_fresco = None
+            try:
+                rap_fresco = fetch_rap_por_navio()
+                persistir_rap_conhecido(session, rap_fresco)
+            except Exception:
+                pass  # RAP é um complemento — não impede o upload de seguir
+
+            rap_lookup = mesclar_rap_lookup(rap_fresco, carregar_rap_conhecido(session))
+            enriquecer_com_rap(records, "santos_brasil", rap_lookup)
+
             aviso = sincronizar_terminal(session, "santos_brasil", records)
             session.commit()
             total_atual = contar_ativos(session, "santos_brasil")

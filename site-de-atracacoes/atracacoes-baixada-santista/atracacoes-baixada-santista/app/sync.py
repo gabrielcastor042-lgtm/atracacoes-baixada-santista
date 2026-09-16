@@ -8,11 +8,18 @@ from sqlalchemy import or_
 from sqlmodel import func, select
 
 from .database import get_session, init_db
-from .models import Atracacao, SyncStatus
+from .models import Atracacao, RapConhecido, SyncStatus
 from .scrapers.base import TerminalScraper
 from .scrapers.btp import BTPScraper
 from .scrapers.embraport import EmbraportScraper
-from .scrapers.porto_santos import enriquecer_com_rap, fetch_rap_por_navio
+from .scrapers.porto_santos import (
+    RapLookup,
+    carregar_rap_conhecido,
+    enriquecer_com_rap,
+    fetch_rap_por_navio,
+    mesclar_rap_lookup,
+    persistir_rap_conhecido,
+)
 from .scrapers.santos_brasil import fetch_gate_data
 from .timezone import agora_brasilia
 
@@ -33,6 +40,14 @@ SUMIDO_GRACE_DAYS = 30
 # ATD nunca foram preenchidos (a Autoridade Portuária de Santos às vezes
 # omite esses eventos) — nesse caso usamos o ETA como base.
 ATB_ATD_GRACE_DAYS = 30
+
+# Quanto tempo guardar um avistamento de RAP no cache persistente
+# (app.models.RapConhecido) depois da ETA daquela viagem. Um pouco mais
+# generoso que ATB_ATD_GRACE_DAYS de propósito: o registro de atracação
+# correspondente pode demorar um pouco mais que isso pra ser removido
+# (ver remover_atracacoes_antigas), e não custa nada manter o avistamento
+# de RAP um pouco além disso.
+RAP_CACHE_GRACE_DAYS = 45
 
 # Adicione aqui novos scrapers assim que estiverem prontos:
 # from .scrapers.santos_brasil import SantosBrasilScraper
@@ -162,6 +177,20 @@ def remover_atracacoes_antigas(session) -> int:
     return len(antigos)
 
 
+def remover_rap_conhecido_antigo(session) -> int:
+    """Remove do cache persistente (RapConhecido) avistamentos cuja ETA já
+    passou de RAP_CACHE_GRACE_DAYS — depois desse prazo o registro de
+    atracação correspondente já deveria ter sido removido também (ver
+    remover_atracacoes_antigas), então não sobra nada pra esse
+    avistamento casar. Sem essa limpeza, o cache cresceria pra sempre."""
+    limite = agora_brasilia() - timedelta(days=RAP_CACHE_GRACE_DAYS)
+    stmt = select(RapConhecido).where(RapConhecido.eta < limite)
+    antigos = session.exec(stmt).all()
+    for existing in antigos:
+        session.delete(existing)
+    return len(antigos)
+
+
 def sincronizar_gate_santos_brasil(session) -> dict:
     """Atualiza deadline/gate dos navios da Santos Brasil que JÁ estão
     cadastrados (via upload manual do arquivo principal), usando a API
@@ -260,21 +289,32 @@ def run_sync() -> dict:
     results = {}
 
     # Consultado uma única vez por rodada e compartilhado entre os
-    # terminais (evita repetir a mesma requisição). Se falhar, seguimos
-    # sem mexer no RAP nessa rodada (rap_lookup = None) — não é motivo
-    # pra derrubar a sincronização, e é diferente de "consultamos e não
-    # achamos ninguém": nesse segundo caso enriquecer_com_rap roda normal
-    # e pode legitimamente limpar RAPs que ficaram desatualizados (ver
-    # _upsert). fetch_rap_por_navio já levanta erro sozinho se a página
-    # vier vazia (0 navios) — sinal de instabilidade no site deles, não
-    # de que ninguém tem RAP agora.
+    # terminais (evita repetir a mesma requisição). Se falhar, seguimos só
+    # com o histórico já acumulado no cache (ver abaixo) — não é motivo
+    # pra derrubar a sincronização. fetch_rap_por_navio já levanta erro
+    # sozinho se a página vier vazia (0 navios) — sinal de instabilidade
+    # no site deles, não de que ninguém tem RAP agora.
+    rap_fresco: Optional[RapLookup] = None
     try:
-        rap_lookup = fetch_rap_por_navio()
+        rap_fresco = fetch_rap_por_navio()
     except Exception:
         logger.warning("Falha ao consultar RAP na Autoridade Portuária de Santos", exc_info=True)
-        rap_lookup = None
 
     with get_session() as session:
+        if rap_fresco is not None:
+            # Grava no cache persistente ANTES de casar — assim, mesmo
+            # que essa leitura seja a única vez que uma viagem específica
+            # apareça na janela rolante deles, o RAP dela já fica salvo
+            # pra sempre (ver docstring de porto_santos.py).
+            persistir_rap_conhecido(session, rap_fresco)
+
+        # O casamento sempre usa a leitura fresca de agora SOMADA a todo o
+        # histórico já visto e guardado no banco — assim um RAP capturado
+        # uma vez não se perde nunca mais, mesmo que a leitura fresca
+        # falhe nessa rodada ou a viagem já tenha saído da janela deles
+        # (bug real, 2026-09-16: COSCO SHIPPING PERU 009W).
+        rap_lookup = mesclar_rap_lookup(rap_fresco, carregar_rap_conhecido(session))
+
         for scraper in ACTIVE_SCRAPERS:
             try:
                 records = scraper.fetch()
@@ -291,11 +331,8 @@ def run_sync() -> dict:
                     # A BTP já expõe o RAP na própria consulta.
                     for record in records:
                         record["rap"] = record.get("fonte_raw_id")
-                elif rap_lookup is not None:
+                else:
                     enriquecer_com_rap(records, scraper.terminal_id, rap_lookup)
-                # else: RAP indisponível nessa rodada (ver acima) — não
-                # inclui "rap" nos registros, então _upsert não mexe no
-                # valor já salvo pra esses navios.
 
                 aviso = sincronizar_terminal(session, scraper.terminal_id, records)
                 session.commit()
@@ -317,11 +354,13 @@ def run_sync() -> dict:
         # Roda pra todos os terminais de uma vez (inclusive Santos Brasil,
         # que só é atualizada pelo upload manual, não pelos scrapers acima).
         removidos = remover_atracacoes_antigas(session)
-        if removidos:
+        removidos_cache = remover_rap_conhecido_antigo(session)
+        if removidos or removidos_cache:
             session.commit()
             logger.info(
-                "Removidas %d atracação(ões) obsoletas (ATB/ATD ou ETA há mais de %d dias)",
-                removidos, ATB_ATD_GRACE_DAYS,
+                "Removidas %d atracação(ões) obsoletas e %d avistamento(s) de RAP "
+                "velho(s) (mais de %d/%d dias)",
+                removidos, removidos_cache, ATB_ATD_GRACE_DAYS, RAP_CACHE_GRACE_DAYS,
             )
     return results
 

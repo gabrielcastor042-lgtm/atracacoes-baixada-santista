@@ -22,8 +22,9 @@ Colunas por linha: Data, Hora, ETA, Local, Navio, IMO, Carga, Evento,
 Viagem (= RAP), DUV, Mapa.
 
 Limitações conhecidas:
-  - Só lista navios ainda PROGRAMADOS (não cobre atracações já
-    concluídas há mais tempo).
+  - Só lista navios ainda PROGRAMADOS, numa janela rolante de poucos dias
+    (não cobre nem o histórico nem o futuro distante) — ver "Cache
+    persistente" abaixo, que existe justamente por causa dessa limitação.
   - O casamento é por nome do navio + terminal, sem um identificador
     único tipo IMO nos outros scrapers — mas um mesmo navio aparece
     aqui várias vezes quando tem mais de uma viagem programada (cada
@@ -39,6 +40,25 @@ Limitações conhecidas:
     tiver ETA parseável, e houver mais de uma viagem candidata pro
     mesmo navio, preferimos deixar o RAP em branco a arriscar mostrar o
     de uma viagem errada.
+
+Cache persistente (app.models.RapConhecido) — BUG CONFIRMADO em produção
+(2026-09-16): como a página só mostra uma janela rolante de poucos dias,
+uma viagem que já aconteceu e saiu dessa janela nunca mais aparece na
+leitura fresca (fetch_rap_por_navio devolve 0 candidatas pra ela), mesmo
+que o RAP dela fosse perfeitamente descobrível enquanto ainda estava
+programada (caso real: COSCO SHIPPING PERU 009W, RAP 04173/2026 — nossa
+janela de captura pra essa viagem específica caiu inteira dentro de uma
+instabilidade da própria página em 2026-09-08, então nunca vimos o RAP
+dela a tempo, e depois que ela atracou/desatracou não tinha mais como
+recuperar). Pior ainda pra Santos Brasil, cujo RAP só é recalculado a
+cada upload manual da planilha (não a cada 10 min como DP World/BTP) —
+a chance de o upload cair bem na janela certa de qualquer viagem é bem
+menor. Por isso `persistir_rap_conhecido`/`carregar_rap_conhecido`
+guardam pra sempre (até a limpeza por idade, ver sync.py) cada
+avistamento (terminal, navio, ETA) -> RAP já visto, e `mesclar_rap_lookup`
+combina esse histórico com a leitura fresca antes de casar — assim, uma
+vez capturado um RAP, ele nunca mais se perde, mesmo que a página saia
+do ar depois ou a viagem role pra fora da janela deles.
 """
 from __future__ import annotations
 
@@ -50,6 +70,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 import urllib3
 from bs4 import BeautifulSoup
+from sqlmodel import select
+
+from ..models import RapConhecido
+from ..timezone import agora_brasilia
+
+RapLookup = Dict[str, Dict[str, List[Tuple[Optional[datetime], str]]]]
 
 URL = (
     "https://www.portodesantos.com.br/informacoes-operacionais/"
@@ -98,17 +124,17 @@ def _formatar_rap(bruto: str) -> str:
     return f"{numero.strip().zfill(5)}  {ano.strip()}"
 
 
-def fetch_rap_por_navio() -> Dict[str, Dict[str, List[Tuple[Optional[datetime], str]]]]:
+def fetch_rap_por_navio() -> RapLookup:
     """Devolve {terminal_id: {navio_normalizado: [(eta, rap), ...]}} a
-    partir da lista de atracações programadas da Autoridade Portuária.
+    partir da lista de atracações programadas da Autoridade Portuária —
+    só o que a página mostra NESSE INSTANTE (janela rolante de poucos
+    dias). Para o histórico acumulado, ver `carregar_rap_conhecido`.
 
     A lista é por NAVIO, não por navio+viagem já feito — por isso o valor
     é uma lista: um mesmo navio pode ter várias viagens programadas (cada
     uma com seu próprio RAP), e é `enriquecer_com_rap` quem decide qual
     delas casa com cada registro, usando a ETA."""
-    resultado: Dict[str, Dict[str, List[Tuple[Optional[datetime], str]]]] = {
-        tid: {} for tid in set(_LOCAL_PARA_TERMINAL.values())
-    }
+    resultado: RapLookup = {tid: {} for tid in set(_LOCAL_PARA_TERMINAL.values())}
 
     try:
         resp = requests.get(URL, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
@@ -176,7 +202,7 @@ _TOLERANCIA_ETA = timedelta(days=3)
 def enriquecer_com_rap(
     records: List[Dict[str, Any]],
     terminal_id: str,
-    rap_lookup: Dict[str, Dict[str, List[Tuple[Optional[datetime], str]]]],
+    rap_lookup: RapLookup,
 ) -> None:
     """Preenche o campo "rap" de cada registro em memória (in-place),
     casando pelo nome do navio normalizado. Usado pra DP World e Santos
@@ -213,6 +239,66 @@ def enriquecer_com_rap(
             record["rap"] = candidatas[0][1]
         else:
             record["rap"] = None
+
+
+def persistir_rap_conhecido(session, rap_lookup: RapLookup) -> None:
+    """Grava (upsert) no banco cada avistamento (terminal, navio, ETA) ->
+    RAP encontrado numa leitura fresca da Autoridade Portuária, acumulando
+    um histórico que sobrevive mesmo depois da viagem sair da janela
+    rolante da página deles (ver docstring do módulo). Só guarda entradas
+    COM ETA — uma entrada sem ETA não dá pra casar com segurança numa
+    consulta futura (o navio pode ter outra viagem por vir), então não
+    vale a pena manter pra sempre."""
+    for terminal_id, tabela in rap_lookup.items():
+        for navio_norm, candidatas in tabela.items():
+            for eta, rap in candidatas:
+                if eta is None:
+                    continue
+                existente = session.get(RapConhecido, (terminal_id, navio_norm, eta))
+                if existente is None:
+                    session.add(RapConhecido(
+                        terminal=terminal_id, navio_normalizado=navio_norm, eta=eta, rap=rap,
+                    ))
+                elif existente.rap != rap:
+                    existente.rap = rap
+                    existente.visto_em = agora_brasilia()
+                    session.add(existente)
+    session.commit()
+
+
+def carregar_rap_conhecido(session) -> RapLookup:
+    """Reconstrói o mesmo formato de `fetch_rap_por_navio` a partir de
+    tudo que já foi visto e guardado por `persistir_rap_conhecido` —
+    inclusive avistamentos de viagens que já saíram da janela rolante da
+    página da Autoridade Portuária."""
+    resultado: RapLookup = {}
+    for row in session.exec(select(RapConhecido)).all():
+        resultado.setdefault(row.terminal, {}).setdefault(row.navio_normalizado, []).append(
+            (row.eta, row.rap)
+        )
+    return resultado
+
+
+def mesclar_rap_lookup(*lookups: Optional[RapLookup]) -> RapLookup:
+    """Combina vários lookups (tipicamente: leitura fresca + histórico do
+    banco) numa lista só de candidatas por navio, sem duplicar a mesma
+    (terminal, navio, eta, rap). Aceita None nos argumentos (ex.: quando a
+    leitura fresca falhou) — simplesmente ignora."""
+    resultado: RapLookup = {}
+    vistos = set()
+    for lookup in lookups:
+        if not lookup:
+            continue
+        for terminal_id, tabela in lookup.items():
+            for navio_norm, candidatas in tabela.items():
+                destino = resultado.setdefault(terminal_id, {}).setdefault(navio_norm, [])
+                for eta, rap in candidatas:
+                    chave = (terminal_id, navio_norm, eta, rap)
+                    if chave in vistos:
+                        continue
+                    vistos.add(chave)
+                    destino.append((eta, rap))
+    return resultado
 
 
 if __name__ == "__main__":
