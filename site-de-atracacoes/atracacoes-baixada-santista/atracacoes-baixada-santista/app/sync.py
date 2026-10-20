@@ -191,6 +191,38 @@ def remover_rap_conhecido_antigo(session) -> int:
     return len(antigos)
 
 
+def reaplicar_rap_santos_brasil(session, rap_lookup: RapLookup) -> int:
+    """Preenche o RAP dos navios da Santos Brasil que JÁ estão no banco,
+    usando o mesmo casamento por navio + ETA do resto do sistema.
+
+    A Santos Brasil não tem scraper automático (a lista principal vem por
+    upload manual), então antes o RAP dela só era recalculado no momento
+    de cada upload — e um navio que entrava na lista da Autoridade
+    Portuária depois do upload ficava sem RAP até o próximo (caso real,
+    2026-10-20: APL NEW JERSEY, COPIAPO e MSC PERLE com RAP disponível na
+    fonte e no cache, mas em branco no site desde o upload da véspera).
+
+    Só preenche ou corrige quando acha correspondência — nunca apaga um
+    RAP já salvo, porque o upload pode ter casado usando uma entrada sem
+    ETA que não fica no cache (ver persistir_rap_conhecido). Devolve
+    quantos registros mudaram."""
+    existentes = session.exec(
+        select(Atracacao).where(Atracacao.terminal == "santos_brasil")
+    ).all()
+    registros = [{"navio": e.navio, "eta": e.eta} for e in existentes]
+    enriquecer_com_rap(registros, "santos_brasil", rap_lookup)
+
+    atualizados = 0
+    for existing, registro in zip(existentes, registros):
+        novo = registro.get("rap")
+        if novo and novo != existing.rap:
+            existing.rap = novo
+            existing.atualizado_em = agora_brasilia()
+            session.add(existing)
+            atualizados += 1
+    return atualizados
+
+
 def sincronizar_gate_santos_brasil(session) -> dict:
     """Atualiza deadline/gate dos navios da Santos Brasil que JÁ estão
     cadastrados (via upload manual do arquivo principal), usando a API
@@ -350,6 +382,19 @@ def run_sync() -> dict:
                 logger.exception("Falha ao sincronizar %s", scraper.terminal_id)
                 results[scraper.terminal_id] = f"erro: {exc}"
                 registrar_status(session, scraper.terminal_id, erro=str(exc))
+
+        # A Santos Brasil não está em ACTIVE_SCRAPERS (lista principal só
+        # por upload manual), mas o RAP dela pode ser atualizado a cada
+        # rodada com o mesmo lookup — ver reaplicar_rap_santos_brasil.
+        try:
+            rap_sb = reaplicar_rap_santos_brasil(session, rap_lookup)
+            if rap_sb:
+                session.commit()
+                logger.info("RAP Santos Brasil: %d navio(s) preenchido(s)/corrigido(s)", rap_sb)
+            results["santos_brasil_rap_atualizados"] = rap_sb
+        except Exception:  # noqa: BLE001
+            session.rollback()
+            logger.exception("Falha ao reaplicar RAP da Santos Brasil")
 
         # Roda pra todos os terminais de uma vez (inclusive Santos Brasil,
         # que só é atualizada pelo upload manual, não pelos scrapers acima).
