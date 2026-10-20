@@ -1,6 +1,12 @@
 fastapi
 uvicorn[standard]
-sqlmodel
+# Fixados por quebras de compatibilidade (2026-10-20):
+# - sqlmodel 0.0.45+ recusa datas sem fuso horário, e o app inteiro grava
+#   datas "naive" no horário de Brasília (ver app/timezone.py);
+# - SQLAlchemy 2.1 troca o driver padrão do Postgres para psycopg 3, que
+#   não está instalado (usamos psycopg2-binary).
+sqlmodel<0.0.45
+sqlalchemy<2.1
 apscheduler
 requests
 beautifulsoup4
